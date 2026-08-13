@@ -1,0 +1,78 @@
+name: Deploy to Google Apps Script
+
+# Auto-push the Apps Script source to Google whenever `main` is updated.
+# Optionally cuts a new versioned Web-app deployment.
+#
+# Prerequisites (once):
+#   1. `npm i -g @google/clasp` locally, `clasp login`, then `cat ~/.clasprc.json`.
+#      Copy the JSON contents into a GitHub Actions secret named `CLASPRC_JSON`.
+#   2. Inside your local checkout, run `clasp clone <YOUR_SCRIPT_ID>` and commit
+#      the resulting `.clasp.json` (safe to publish — it holds only the script id).
+#      OR: create a repository secret `CLASP_JSON` and populate `.clasp.json` at
+#      runtime with the same content (kept private).
+#   3. Optional: set repository secret `DEPLOY_ID` = an existing web-app
+#      deployment id to update in place (from `clasp deployments`).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps-script/**'
+      - '.github/workflows/deploy-appsscript.yml'
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Cut a new versioned web-app deployment?'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: appsscript-deploy
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps-script
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install clasp
+        run: npm i -g @google/clasp@2.4.2
+
+      - name: Write clasp credentials
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ]; then echo "::error::CLASPRC_JSON secret is missing"; exit 1; fi
+          echo "$CLASPRC_JSON" > ~/.clasprc.json
+
+      - name: Write .clasp.json (if not committed)
+        env:
+          CLASP_JSON: ${{ secrets.CLASP_JSON }}
+        run: |
+          if [ -n "$CLASP_JSON" ]; then echo "$CLASP_JSON" > .clasp.json; fi
+          test -f .clasp.json || { echo "::error::.clasp.json missing and CLASP_JSON secret not set"; exit 1; }
+
+      - name: Push source to Apps Script
+        run: clasp push --force
+
+      - name: Deploy new version (optional)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true' }}
+        env:
+          DEPLOY_ID: ${{ secrets.DEPLOY_ID }}
+        run: |
+          DESC="ci-$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_SHA::7}"
+          if [ -n "$DEPLOY_ID" ]; then
+            clasp deploy --deploymentId "$DEPLOY_ID" --description "$DESC"
+          else
+            clasp deploy --description "$DESC"
+          fi

@@ -1,0 +1,15 @@
+# Files that should NOT be pushed to Apps Script.
+# .gs / .html / appsscript.json are pushed; everything below is skipped.
+**/node_modules/**
+**/.git/**
+**/.github/**
+**/*.md
+**/README*
+**/DEPLOYMENT*
+**/USER_MANUAL*
+**/ARCHITECTURE*
+**/ACCEPTANCE*
+**/CHANGE_REGISTER*
+**/CI_CD*
+**/templates/**
+**/*.zip

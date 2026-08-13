@@ -48,14 +48,23 @@ function sendEmail_(options) {
     var status = 'PENDING';
     var errorMsg = '';
     var messageRef = '';
+    // Attachments: array of { name, mimeType, dataBase64 }
+    var blobs = (opt.attachments || []).map(function(a) {
+      try {
+        var bytes = Utilities.base64Decode(a.dataBase64 || '');
+        return Utilities.newBlob(bytes, a.mimeType || 'application/octet-stream', a.name || 'attachment');
+      } catch (e) { return null; }
+    }).filter(Boolean);
     try {
-      GmailApp.sendEmail(toAddr.join(','), subject, stripHtml_(opt.htmlBody || ''), {
+      var mailOpts = {
         htmlBody: (opt.htmlBody || '') + (getSetting_('SIGNATURE','') || ''),
         name: senderName,
         cc: ccAddr.join(','),
         bcc: bccAddr.join(','),
         replyTo: replyTo || undefined
-      });
+      };
+      if (blobs.length) mailOpts.attachments = blobs;
+      GmailApp.sendEmail(toAddr.join(','), subject, stripHtml_(opt.htmlBody || ''), mailOpts);
       status = 'SENT';
       messageRef = 'gmail:' + Utilities.getUuid();
     } catch (e) {

@@ -149,6 +149,8 @@ var RPC_ROUTES = {
   'admin.run.reminder25': { roles: ['ADMIN'], fn: function(p, me) { return runJob_('REMINDER_25', p, me); } },
   'admin.run.reminderLWD':{ roles: ['ADMIN'], fn: function(p, me) { return runJob_('REMINDER_LWD', p, me); } },
   'admin.run.dispatch':   { roles: ['ADMIN'], fn: function(p, me) { return runJob_('MONTHLY_DISPATCH', p, me); } },
+  'admin.run.summary':    { roles: ['ADMIN'], fn: function(p, me) { return runJob_('MONTHLY_SUMMARY', p, me); } },
+  'admin.export.csv':     { roles: ['ADMIN','MANAGER'], fn: function(p, me) { return exportCsv_(p); } },
   'admin.automation.status': { roles: ['ADMIN','MANAGER'], fn: function(p, me) { return automationStatus_(); } },
   'admin.setup.seed':     { roles: ['ADMIN'], fn: function(p, me) { return seedDemoData_(me); } },
   'admin.setup.triggers': { roles: ['ADMIN'], fn: function(p, me) { return installTriggers_(); } }

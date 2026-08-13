@@ -2,7 +2,14 @@
 
 Tracks what was built, what was intentionally deferred, and what remains open. Grows over time.
 
-## v1.0.0 — Initial delivery
+## v1.1.0 — 2026-01-15 (backlog delivery)
+
+- **CSV Export** — `admin.export.csv` server RPC + *Export CSV* button on the Logs page. Downloads a proper RFC-4180 CSV of `EMAIL_LOG` / `AUDIT_LOG` / `REMINDER_LOG` (extensible to any schema table). Server-side generation so admins get *all* rows, not just what's on screen; empty and quoted-comma cells are handled correctly.
+- **Escalation Attachments** — Drop-zone + file picker on *Raise escalation*. Files are FileReader-encoded to base64 in the browser, sent through `escalations.raise`, converted to `Utilities.newBlob` and attached to the Gmail send via `GmailApp.sendEmail({attachments})`. 20 MB total limit enforced client-side; per-file remove; audit log records attachment count.
+- **Monthly Summary Digest** — New job type `MONTHLY_SUMMARY` runs on day 2 at 09:00 IST (configurable via `MONTHLY_SUMMARY_DAY` / `MONTHLY_SUMMARY_TIME`). Sends every active ADMIN + `ESCALATION_MANAGER` an HTML digest of the **previous month**: dispatches sent, reminders sent, incomplete escalations, failed sends (top 20), open escalation count. Idempotent via `YYYY-MM-MONTHLY_SUMMARY` JobKey. Admin can *Run monthly summary* manually with Force.
+- **CI Auto-Push** — `.github/workflows/deploy-appsscript.yml` uses `clasp` to push every merge to `main` to Apps Script. Optional workflow-dispatch input cuts a new versioned deployment. Companion files: `.claspignore`, `.clasp.json.example`, `CI_CD.md` with the full setup guide.
+
+## v1.0.0 — 2026-01-15 (initial delivery)
 
 ### Implemented
 

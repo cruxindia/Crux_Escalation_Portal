@@ -29,8 +29,11 @@ Crux Risk Management Pvt Ltd needs a small, production-ready internal tool to au
 11. Admin console for users, settings, templates, holidays, automation status.
 12. Progressive-disclosure UI, responsive down to mobile widths, distinctive ink+amber palette, calm density.
 
-## What's Implemented (v1.0.0 — 2026-01-15)
-All items above. See `apps-script/CHANGE_REGISTER.md` for the detailed register and `apps-script/ACCEPTANCE_TESTS.md` for the 30-test acceptance matrix.
+## What's Implemented
+- **v1.0.0 (2026-01-15)** — full spec coverage per problem statement.
+- **v1.1.0 (2026-01-15)** — backlog delivery: CSV export (Logs → ⬇ Export CSV), Escalation attachments (drop-zone on Raise Escalation with 20MB limit), Monthly Summary Digest (job `MONTHLY_SUMMARY`, day 2 at 09:00 IST, all active admins), CI Auto-Push (GitHub Actions + clasp, see `CI_CD.md`).
+
+See `apps-script/CHANGE_REGISTER.md` for the detailed register and `apps-script/ACCEPTANCE_TESTS.md` for the 36-test acceptance matrix.
 
 ## Deliverables
 Located in `/app/apps-script/`:

@@ -615,6 +615,7 @@
     });
   }
   function openRaiseEscalation() {
+    Routes._raiseAttachments = [];
     clientPicker('r-client').then(function(sel){
       Modal.open({
         title: 'Raise a formal escalation',
@@ -630,7 +631,14 @@
           '<div class="field"><label>Details</label><textarea id="r-details" data-testid="input-raise-details"></textarea></div>'+
           '<div class="field"><label>Required resolution</label><textarea id="r-resolution" data-testid="input-raise-resolution"></textarea></div>'+
           '<div class="form-row"><div class="field"><label>To (comma-separated)*</label><input id="r-to" data-testid="input-raise-to"></div>'+
-          '<div class="field"><label>CC (comma-separated)</label><input id="r-cc" data-testid="input-raise-cc"></div></div>',
+          '<div class="field"><label>CC (comma-separated)</label><input id="r-cc" data-testid="input-raise-cc"></div></div>'+
+          '<div class="field"><label>Attachments (PDF, images, documents up to 20MB total)</label>'+
+            '<div id="r-drop" class="dropzone" data-testid="drop-attachments">'+
+              '<input type="file" id="r-files" multiple style="display:none" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.xls,.xlsx,.txt,.csv" data-testid="input-attachments">'+
+              '<div>Drag files here or <a href="#" id="r-pick">browse</a></div>'+
+              '<div id="r-att-list" class="muted" style="margin-top:8px;font-size:12px"></div>'+
+            '</div>'+
+          '</div>',
         actions: [
           { label:'Cancel', kind:'secondary', close:true },
           { label:'Send escalation', testid:'submit-raise-escalation', onClick: function() {
@@ -638,9 +646,11 @@
               ClientID: val('r-client'), BranchCode: val('r-brcode'),
               Category: val('r-cat'), Severity: val('r-sev'), DueDate: val('r-due'),
               PersonConcerned: val('r-person'), Details: val('r-details'),
-              RequiredResolution: val('r-resolution'), To: val('r-to'), Cc: val('r-cc')
+              RequiredResolution: val('r-resolution'), To: val('r-to'), Cc: val('r-cc'),
+              Attachments: Routes._raiseAttachments
             };
             rpc('escalations.raise', payload).then(function(res){
+              Routes._raiseAttachments = [];
               Modal.close();
               toast(res.email && res.email.status === 'SENT' ? 'Escalation sent' : 'Escalation created (email: '+(res.email && res.email.status)+')', res.email && res.email.status === 'SENT' ? 'ok' : 'err');
               go('escalations');
@@ -648,7 +658,39 @@
           }}
         ]
       });
+      // Wire drop-zone
+      var drop = document.getElementById('r-drop');
+      var files = document.getElementById('r-files');
+      document.getElementById('r-pick').addEventListener('click', function(e){ e.preventDefault(); files.click(); });
+      files.addEventListener('change', function(){ ingestFiles(files.files); });
+      ['dragenter','dragover'].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); e.stopPropagation(); drop.classList.add('dragging'); }); });
+      ['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); e.stopPropagation(); drop.classList.remove('dragging'); }); });
+      drop.addEventListener('drop', function(e){ ingestFiles(e.dataTransfer.files); });
     });
+  }
+  function ingestFiles(fileList) {
+    var list = document.getElementById('r-att-list');
+    var TOTAL_LIMIT = 20 * 1024 * 1024;
+    var current = Routes._raiseAttachments.reduce(function(s,a){ return s + (a._size||0); }, 0);
+    Array.prototype.forEach.call(fileList, function(f) {
+      if (current + f.size > TOTAL_LIMIT) { toast('Attachment '+f.name+' skipped — 20MB total limit','err'); return; }
+      current += f.size;
+      var reader = new FileReader();
+      reader.onload = function() {
+        var base64 = reader.result.split(',')[1] || '';
+        Routes._raiseAttachments.push({ name: f.name, mimeType: f.type || 'application/octet-stream', dataBase64: base64, _size: f.size });
+        renderAttList();
+      };
+      reader.readAsDataURL(f);
+    });
+    function renderAttList() {
+      list.innerHTML = Routes._raiseAttachments.map(function(a, i){
+        return '<div>📎 '+esc(a.name)+' <span class="muted">('+Math.round(a._size/1024)+' KB)</span> <a href="#" data-i="'+i+'" class="rm-att">remove</a></div>';
+      }).join('');
+      list.querySelectorAll('.rm-att').forEach(function(el){
+        el.addEventListener('click', function(e){ e.preventDefault(); Routes._raiseAttachments.splice(parseInt(el.getAttribute('data-i'),10), 1); renderAttList(); });
+      });
+    }
   }
   function openEscalationDetail(e) {
     var body = '<div class="kv"><span class="k">ID</span><span class="mono">'+esc(e.EscalationID)+'</span></div>'+
@@ -802,12 +844,14 @@
         kvRow('Next 25th reminder', a.nextReminder25),
         kvRow('Next last-working-day reminder', a.nextReminderLWD),
         kvRow('Next monthly dispatch', a.nextMonthlyDispatch),
+        kvRow('Next monthly summary', a.nextMonthlySummary || '—'),
         kvRow('Last success', a.lastSuccess || '—'),
         kvRow('Last failure', a.lastFailure || '—'),
         h('div',{class:'btn-row'},[
           h('button',{class:'btn secondary', testid:'btn-run-25', onclick: function(){ rpc('admin.run.reminder25',{ force:true }).then(function(r){ toast('25th reminder run: sent='+r.sent+' failed='+r.failed,'ok'); }).catch(function(e){ toast(e.message,'err'); }); }},['Run 25th reminder']),
           h('button',{class:'btn secondary', testid:'btn-run-lwd', onclick: function(){ rpc('admin.run.reminderLWD',{ force:true }).then(function(r){ toast('LWD reminder run: sent='+r.sent+' failed='+r.failed,'ok'); }).catch(function(e){ toast(e.message,'err'); }); }},['Run LWD reminder']),
-          h('button',{class:'btn warn', testid:'btn-run-dispatch', onclick: function(){ rpc('admin.run.dispatch',{ force:true }).then(function(r){ toast('Dispatch: ok='+r.ok+' incomplete='+r.incomplete+' failed='+r.failed,'ok'); }).catch(function(e){ toast(e.message,'err'); }); }},['Run monthly dispatch'])
+          h('button',{class:'btn warn', testid:'btn-run-dispatch', onclick: function(){ rpc('admin.run.dispatch',{ force:true }).then(function(r){ toast('Dispatch: ok='+r.ok+' incomplete='+r.incomplete+' failed='+r.failed,'ok'); }).catch(function(e){ toast(e.message,'err'); }); }},['Run monthly dispatch']),
+          h('button',{class:'btn secondary', testid:'btn-run-summary', onclick: function(){ rpc('admin.run.summary',{ force:true }).then(function(r){ toast('Summary sent to '+r.admins+' admin(s): sent='+r.sent+' failed='+r.failed,'ok'); }).catch(function(e){ toast(e.message,'err'); }); }},['Run monthly summary'])
         ])
       ]));
     });
@@ -826,7 +870,12 @@
 
   /* ============ LOGS ============ */
   Routes.logs = function(root) {
-    root.appendChild(h('div',{class:'pageheader'},[h('div',{},[h('h1',{},['Logs']), h('div',{class:'sub'},['Email, audit and reminder trails.'])])]));
+    root.appendChild(h('div',{class:'pageheader'},[
+      h('div',{},[h('h1',{},['Logs']), h('div',{class:'sub'},['Email, audit and reminder trails.'])]),
+      h('div',{},[
+        h('button',{class:'btn secondary small', testid:'btn-export-csv', onclick: function(){ exportCurrentLog(); }},['⬇ Export CSV'])
+      ])
+    ]));
     var tabs = ['Email','Audit','Reminders'];
     var current = state.routeParams.tab || 'Email';
     root.appendChild(h('div',{class:'tabs'}, tabs.map(function(t){ return h('div',{class:'tab'+(current===t?' active':''), testid:'tab-log-'+t.toLowerCase(), onclick: function(){ state.routeParams.tab = t; render(); }},[t]); })));
@@ -835,6 +884,19 @@
     else if (current === 'Audit') loadLog(body, 'admin.logs.audit', ['Timestamp','User','Action','Entity','EntityID']);
     else loadLog(body, 'admin.logs.reminders', ['JobKey','Type','ExecutedAt','ExecutedBy','Result','Notes']);
   };
+  function exportCurrentLog() {
+    var tab = state.routeParams.tab || 'Email';
+    var table = tab === 'Email' ? 'EMAIL_LOG' : (tab === 'Audit' ? 'AUDIT_LOG' : 'REMINDER_LOG');
+    rpc('admin.export.csv', { table: table }).then(function(res){ downloadBase64(res.filename, res.mime, res.dataBase64); toast('Exported '+res.rowCount+' rows','ok'); }).catch(function(e){ toast(e.message,'err'); });
+  }
+  function downloadBase64(filename, mime, base64) {
+    var bin = atob(base64); var arr = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    var blob = new Blob([arr], { type: mime });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 500);
+  }
   function loadLog(body, action, cols) {
     body.innerHTML = '<div class="empty">Loading…</div>';
     rpc(action, {}).then(function(res){

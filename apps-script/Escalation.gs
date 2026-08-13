@@ -97,9 +97,10 @@ function raiseEscalationCase_(payload, me) {
     to: to, cc: cc, subject: renderTemplate_(tpl.Subject, vars),
     htmlBody: renderTemplate_(tpl.Body, vars),
     trigger: 'escalations.raise',
-    idempotencyKey: 'ESC-' + row.EscalationID
+    idempotencyKey: 'ESC-' + row.EscalationID,
+    attachments: e.Attachments || []
   });
-  logAudit_({ user: me.email, action: 'ESCALATION_RAISE', entity: 'ESCALATIONS', entityId: row.EscalationID, oldValue: '', newValue: JSON.stringify({ to: to, cc: cc, emailStatus: res.status }) });
+  logAudit_({ user: me.email, action: 'ESCALATION_RAISE', entity: 'ESCALATIONS', entityId: row.EscalationID, oldValue: '', newValue: JSON.stringify({ to: to, cc: cc, emailStatus: res.status, attachments: (e.Attachments||[]).length }) });
   return { escalation: row, email: res };
 }
 

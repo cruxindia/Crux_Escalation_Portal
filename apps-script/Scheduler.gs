@@ -9,7 +9,7 @@
  *   4. LockService prevents concurrent execution.
  */
 
-var JOB_TYPES = { R25:'REMINDER_25', RLW:'REMINDER_LWD', DIS:'MONTHLY_DISPATCH' };
+var JOB_TYPES = { R25:'REMINDER_25', RLW:'REMINDER_LWD', DIS:'MONTHLY_DISPATCH', SUM:'MONTHLY_SUMMARY' };
 
 /** Called by the installable time-driven trigger every 5 minutes. */
 function tick() {
@@ -25,19 +25,25 @@ function tick() {
     var remTime = getSetting_('REMINDER_TIME','12:00');
     var disDay = parseInt(getSetting_('MONTHLY_DISPATCH_DAY','1'), 10);
     var disTime = getSetting_('MONTHLY_DISPATCH_TIME','10:00');
-    // Reminder 25th: fire on the configured day at the earliest tick >= configured time.
+    var sumDay = parseInt(getSetting_('MONTHLY_SUMMARY_DAY','2'), 10);
+    var sumTime = getSetting_('MONTHLY_SUMMARY_TIME','09:00');
+    // Reminder 25th
     if (today === remDay && hhmm >= remTime && !jobDone_(month, JOB_TYPES.R25)) {
       runReminder_(JOB_TYPES.R25, 'auto');
     }
-    // Reminder LWD: compute last-working-day for current month; fire on that day at >= configured time.
+    // Reminder LWD
     var lwd = lastWorkingDay_(now.getFullYear(), now.getMonth());
     var lwdDay = parseInt(Utilities.formatDate(lwd, tz, 'd'), 10);
     if (today === lwdDay && hhmm >= remTime && !jobDone_(month, JOB_TYPES.RLW)) {
       runReminder_(JOB_TYPES.RLW, 'auto');
     }
-    // Monthly dispatch on 1st (of NEW month), at configured time.
+    // Monthly dispatch on 1st
     if (today === disDay && hhmm >= disTime && !jobDone_(month, JOB_TYPES.DIS)) {
       runDispatch_('auto');
+    }
+    // Monthly summary digest on 2nd (of same month, reporting on previous month)
+    if (today === sumDay && hhmm >= sumTime && !jobDone_(month, JOB_TYPES.SUM)) {
+      runMonthlySummary_('auto');
     }
   } finally {
     lock.releaseLock();
@@ -194,7 +200,81 @@ function runJob_(type, payload, me) {
     }
   }
   if (type === JOB_TYPES.DIS) return runDispatch_(me.email);
+  if (type === JOB_TYPES.SUM) return runMonthlySummary_(me.email);
   return runReminder_(type, me.email);
+}
+
+/**
+ * Monthly summary digest — sent to admins on the 2nd (configurable).
+ * Reports on the PREVIOUS calendar month: sent, failed, incomplete, escalations.
+ */
+function runMonthlySummary_(executedBy) {
+  var now = new Date();
+  var thisMonthKey = Utilities.formatDate(now, getTz_(), 'yyyy-MM');
+  if (jobDone_(thisMonthKey, JOB_TYPES.SUM)) return { skipped: true };
+  // Previous month (report period)
+  var prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  var prevKey = Utilities.formatDate(prev, getTz_(), 'yyyy-MM');
+  var prevLabel = Utilities.formatDate(prev, getTz_(), 'MMMM yyyy');
+  var emails = readTable_('EMAIL_LOG').filter(function(r){ return String(r.Timestamp).indexOf(prevKey) === 0; });
+  var sent = emails.filter(function(r){ return r.Status === 'SENT'; });
+  var failed = emails.filter(function(r){ return r.Status === 'FAILED'; });
+  var dispatched = sent.filter(function(r){ return r.Type === 'MONTHLY_DISPATCH'; });
+  var incomplete = emails.filter(function(r){ return r.Type === 'INCOMPLETE_ESCALATION'; });
+  var reminders = emails.filter(function(r){ return r.Type === 'REMINDER_25' || r.Type === 'REMINDER_LWD'; });
+  var escalations = readTable_('ESCALATIONS').filter(function(r){ return String(r.CreatedAt).indexOf(prevKey) === 0; });
+  var openEsc = escalations.filter(function(r){ return ['OPEN','ASSIGNED','IN_PROGRESS'].indexOf(r.Status) !== -1; });
+  var admins = readTable_('USERS').filter(function(u){ return u.Role === 'ADMIN' && u.Status === 'ACTIVE'; }).map(function(u){ return u.Email; }).filter(isEmail_);
+  var manager = getSetting_('ESCALATION_MANAGER','');
+  if (isEmail_(manager) && admins.indexOf(manager) === -1) admins.push(manager);
+  if (!admins.length) {
+    recordJob_(thisMonthKey, JOB_TYPES.SUM, 'PARTIAL', 'no active admin recipients', executedBy);
+    return { ok: false, reason: 'no admin recipients' };
+  }
+  // Build failed-list table (top 20)
+  var failRows = failed.slice(0, 20).map(function(r){
+    return '<tr><td style="border:1px solid #d0d7de;padding:6px">' + escHtml_(r.Timestamp) +
+      '</td><td style="border:1px solid #d0d7de;padding:6px">' + escHtml_(r.Type) +
+      '</td><td style="border:1px solid #d0d7de;padding:6px">' + escHtml_(r.ToAddr) +
+      '</td><td style="border:1px solid #d0d7de;padding:6px">' + escHtml_(r.Error) + '</td></tr>';
+  }).join('');
+  var failTable = failed.length ?
+    '<h4 style="font-family:Georgia,serif;margin:14px 0 6px">Failed sends (' + failed.length + ')</h4>' +
+    '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">' +
+    '<thead style="background:#f6f8fa"><tr><th style="border:1px solid #d0d7de;padding:6px">When</th><th style="border:1px solid #d0d7de;padding:6px">Type</th><th style="border:1px solid #d0d7de;padding:6px">To</th><th style="border:1px solid #d0d7de;padding:6px">Error</th></tr></thead><tbody>' +
+    failRows + '</tbody></table>' : '<p style="color:#0a7d3b"><b>Zero failed sends</b> — a clean month.</p>';
+  var incompleteList = incomplete.slice(0, 20).map(function(r){
+    return '<li>' + escHtml_(r.ClientID) + ' — ' + escHtml_(r.ToAddr) + '</li>';
+  }).join('');
+  var body = '<p>Hi Admins,</p>' +
+    '<p>Here is the automated digest for <b>' + escHtml_(prevLabel) + '</b>.</p>' +
+    '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px;margin:10px 0">' +
+      kv_('Client dispatches sent', String(dispatched.length)) +
+      kv_('Reminders sent', String(reminders.length)) +
+      kv_('Incomplete-matrix escalations', String(incomplete.length)) +
+      kv_('Total failed sends', String(failed.length)) +
+      kv_('Total emails logged', String(emails.length)) +
+      kv_('Escalations opened in month', String(escalations.length)) +
+      kv_('Still open', String(openEsc.length)) +
+    '</table>' +
+    (incomplete.length ? '<h4 style="font-family:Georgia,serif;margin:14px 0 6px">Clients that missed dispatch</h4><ul>' + incompleteList + '</ul>' : '') +
+    failTable +
+    '<p style="color:#5b6473;margin-top:16px">Generated automatically. Manage recipients via <code>MONTHLY_SUMMARY_DAY</code> and admin roster.</p>';
+  var subject = '[Crux] Monthly summary — ' + prevLabel;
+  var results = { sent: 0, failed: 0 };
+  admins.forEach(function(addr) {
+    try {
+      var res = sendEmail_({
+        type: 'MONTHLY_SUMMARY', to: [addr], cc: [],
+        subject: subject, htmlBody: body,
+        trigger: 'scheduler.summary',
+        idempotencyKey: thisMonthKey + '-SUMMARY-' + addr
+      });
+      if (res.status === 'SENT' || res.skipped) results.sent++; else results.failed++;
+    } catch (e) { results.failed++; }
+  });
+  recordJob_(thisMonthKey, JOB_TYPES.SUM, results.failed === 0 ? 'OK' : 'PARTIAL', 'sent=' + results.sent + ' failed=' + results.failed, executedBy);
+  return { period: prevLabel, admins: admins.length, sent: results.sent, failed: results.failed };
 }
 
 function automationStatus_() {
@@ -204,6 +284,8 @@ function automationStatus_() {
   var remTime = getSetting_('REMINDER_TIME','12:00');
   var disDay = parseInt(getSetting_('MONTHLY_DISPATCH_DAY','1'), 10);
   var disTime = getSetting_('MONTHLY_DISPATCH_TIME','10:00');
+  var sumDay = parseInt(getSetting_('MONTHLY_SUMMARY_DAY','2'), 10);
+  var sumTime = getSetting_('MONTHLY_SUMMARY_TIME','09:00');
   function next(day, timeHHmm, useLWD) {
     var d = new Date(now.getFullYear(), now.getMonth(), 1);
     for (var i = 0; i < 3; i++) {
@@ -222,6 +304,7 @@ function automationStatus_() {
     nextReminder25: next(remDay, remTime, false),
     nextReminderLWD: next(null, remTime, true),
     nextMonthlyDispatch: next(disDay, disTime, false),
+    nextMonthlySummary: next(sumDay, sumTime, false),
     lastSuccess: lastOk ? (lastOk.Type + ' @ ' + lastOk.ExecutedAt) : '',
     lastFailure: lastFail ? (lastFail.Type + ' @ ' + lastFail.ExecutedAt + ' — ' + lastFail.Notes) : ''
   };

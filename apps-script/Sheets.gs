@@ -29,6 +29,8 @@ var DEFAULT_SETTINGS = [
   ['REMINDER_TIME','12:00','Time of day HH:mm (24h)'],
   ['MONTHLY_DISPATCH_DAY','1','Day of month to dispatch matrix to client'],
   ['MONTHLY_DISPATCH_TIME','10:00','Time of day HH:mm for dispatch'],
+  ['MONTHLY_SUMMARY_DAY','2','Day of month to email admin summary of previous month'],
+  ['MONTHLY_SUMMARY_TIME','09:00','Time of day HH:mm for summary digest'],
   ['FROM_NAME','Crux Risk Management','Email display name'],
   ['REPLY_TO','','Reply-to address (blank uses sender)'],
   ['DEFAULT_CC','','Default CC (comma separated)'],
@@ -276,4 +278,35 @@ function queryAuditLog_(p) {
 function queryReminderLog_(p) {
   var rows = readTable_('REMINDER_LOG');
   return paginate_(rows, p);
+}
+
+/**
+ * Server-side CSV export. Admins/managers can pull whole logs for month-end reporting.
+ * payload: { table: 'EMAIL_LOG'|'AUDIT_LOG'|'REMINDER_LOG'|'ESCALATIONS'|'CLIENTS'|'BRANCHES', filters?: {} }
+ * Returns { filename, mime, dataBase64 }
+ */
+function exportCsv_(payload) {
+  var table = payload && payload.table;
+  if (!SCHEMA[table]) throw ValidationError_('Unknown table: ' + table);
+  var rows = readTable_(table);
+  if (payload && payload.filters) rows = applyFilters_(rows, payload.filters);
+  var headers = SCHEMA[table];
+  var lines = [headers.map(csvCell_).join(',')];
+  rows.forEach(function(r){ lines.push(headers.map(function(h){ return csvCell_(r[h]); }).join(',')); });
+  var csv = lines.join('\r\n');
+  var stamp = Utilities.formatDate(new Date(), getTz_(), 'yyyyMMdd-HHmm');
+  return {
+    filename: table.toLowerCase() + '-' + stamp + '.csv',
+    mime: 'text/csv',
+    dataBase64: Utilities.base64Encode(csv, Utilities.Charset.UTF_8),
+    rowCount: rows.length
+  };
+}
+
+function csvCell_(v) {
+  if (v === null || v === undefined) return '';
+  var s = String(v);
+  if (s.indexOf('"') !== -1) s = s.replace(/"/g, '""');
+  if (s.indexOf(',') !== -1 || s.indexOf('"') !== -1 || s.indexOf('\n') !== -1 || s.indexOf('\r') !== -1) s = '"' + s + '"';
+  return s;
 }
