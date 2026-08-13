@@ -116,4 +116,30 @@ The spreadsheet lives in Drive; enable Drive backups and version history. To res
 
 Only the source files in `/app/apps-script/` need to live in GitHub. Deployment happens in Google Apps Script — GitHub does not host the running app.
 
-If you want to sync GitHub → Apps Script automatically, install `clasp` (`npm i -g @google/clasp`), run `clasp login`, `clasp clone <SCRIPT_ID>` inside a local copy, and set up a GitHub Action that runs `clasp push` on merges to `main`.
+If you want to sync GitHub → Apps Script automatically, install `clasp` (`npm i -g @google/clasp`), run `clasp login`, `clasp clone <SCRIPT_ID>` inside a local copy, and set up a GitHub Action that runs `clasp push` on merges to `main`. See `CI_CD.md` for the ready-made workflow.
+
+## 12. Client Portal (read-only, tokenised)
+
+The tool includes a **read-only client-facing portal**. Any admin/manager/location-head can click **🔗 Client portal link** on a client's detail page to get a signed URL of the form:
+
+```
+<WEB_APP_URL>?view=portal&c=<ClientID>&t=<HMAC>
+```
+
+Send this to your client — they open it in a browser and see their **current escalation matrix + branch contacts**, without needing a Crux login. The token is an HMAC-SHA256 of the client id keyed with a secret stored in Script Properties. If a link ever leaks, run *Admin → Setup → 🔒 **Rotate portal secret*** to invalidate **every** existing link at once.
+
+### Access mode considerations
+
+Apps Script has one *Access* setting per deployment. The portal behaves differently depending on it:
+
+| Deployment access                       | Behaviour                                                                                                |
+|-----------------------------------------|----------------------------------------------------------------------------------------------------------|
+| **Only people in your Crux domain**     | Portal works, but only Crux users can open it — safest choice for a first roll-out; useful internally.   |
+| **Anyone with the link**                | Any recipient of the signed URL can view the matrix (still gated by token). Best for actual client-share.|
+| **Anyone (anonymous)**                  | Same as above; also removes Google login prompt. Best for the smoothest client experience.               |
+
+Choose the one that fits your risk appetite. You can maintain **two separate deployments** — a domain-only one for the internal SPA and an anyone-with-link one dedicated to the portal — and share only the portal URL externally.
+
+## 13. Gemini AI
+
+See `AI.md` for the full Gemini integration guide (setup, features, safety, and troubleshooting).

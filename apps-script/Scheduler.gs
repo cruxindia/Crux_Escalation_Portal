@@ -227,10 +227,23 @@ function runMonthlySummary_(executedBy) {
   var admins = readTable_('USERS').filter(function(u){ return u.Role === 'ADMIN' && u.Status === 'ACTIVE'; }).map(function(u){ return u.Email; }).filter(isEmail_);
   var manager = getSetting_('ESCALATION_MANAGER','');
   if (isEmail_(manager) && admins.indexOf(manager) === -1) admins.push(manager);
+  // Extra digest recipients (§ Digest Recipients): comma/semicolon separated.
+  var extra = parseListStr_(getSetting_('SUMMARY_EXTRA_RECIPIENTS',''));
+  extra.filter(isEmail_).forEach(function(e){ if (admins.indexOf(e) === -1) admins.push(e); });
   if (!admins.length) {
     recordJob_(thisMonthKey, JOB_TYPES.SUM, 'PARTIAL', 'no active admin recipients', executedBy);
     return { ok: false, reason: 'no admin recipients' };
   }
+  // AI insight (soft-fails if Gemini not configured).
+  var aiPara = aiSummaryInsight_(prevLabel, {
+    dispatched: dispatched.length, reminders: reminders.length,
+    incomplete: incomplete.length, failed: failed.length,
+    escalations: escalations.length, open: openEsc.length
+  }, incomplete.slice(0, 15).map(function(r){ return r.ClientID; }),
+     failed.slice(0, 8).map(function(r){ return r.Error || ''; }));
+  var aiBlock = aiPara ? ('<div style="background:#e0f2fe;border-left:3px solid #0369a1;padding:12px 14px;margin:12px 0;font-family:Arial,sans-serif;font-size:13px;color:#0e1116">' +
+    '<div style="font-family:Georgia,serif;font-size:14px;margin-bottom:4px">What changed / what to watch</div>' +
+    escHtml_(aiPara) + '</div>') : '';
   // Build failed-list table (top 20)
   var failRows = failed.slice(0, 20).map(function(r){
     return '<tr><td style="border:1px solid #d0d7de;padding:6px">' + escHtml_(r.Timestamp) +
@@ -248,6 +261,7 @@ function runMonthlySummary_(executedBy) {
   }).join('');
   var body = '<p>Hi Admins,</p>' +
     '<p>Here is the automated digest for <b>' + escHtml_(prevLabel) + '</b>.</p>' +
+    aiBlock +
     '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px;margin:10px 0">' +
       kv_('Client dispatches sent', String(dispatched.length)) +
       kv_('Reminders sent', String(reminders.length)) +

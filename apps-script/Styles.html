@@ -161,6 +161,31 @@ h3 { font-size: 16px; }
 
 .dropzone { border: 2px dashed var(--ink-100); border-radius: 12px; padding: 24px; text-align: center; background: var(--ink-50); }
 .dropzone.dragging { background: var(--amber-100); border-color: var(--amber-500); }
+.att-bar { text-align: left; }
+.att-bar-track { height: 6px; background: var(--ink-100); border-radius: 999px; overflow: hidden; }
+.att-bar-fill { height: 100%; background: linear-gradient(90deg, var(--emerald-600), var(--amber-500)); border-radius: 999px; transition: width .18s ease; }
+.att-bar-fill.warn { background: var(--amber-500); }
+.att-bar-fill.err  { background: var(--rose-600); }
+.att-bar-meta { margin-top: 6px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-500); display:flex; justify-content:space-between; }
+
+/* Chat panel */
+.chat-window { display:flex; flex-direction: column; gap: 8px; max-height: 460px; overflow: auto; padding: 8px 4px; }
+.chat-msg { padding: 10px 12px; border-radius: 12px; max-width: 84%; white-space: pre-wrap; word-break: break-word; }
+.chat-msg.user { background: var(--ink-900); color: #fff; align-self: flex-end; }
+.chat-msg.ai   { background: var(--ink-50); color: var(--ink-900); align-self: flex-start; border: 1px solid var(--ink-100); }
+.chat-msg.sys  { background: var(--amber-100); color: var(--amber-600); align-self: center; font-family: var(--font-mono); font-size: 11px; }
+.chat-input { display:flex; gap:8px; }
+.chat-input input { flex: 1; }
+
+/* Portal (read-only client view) */
+.portal-shell { max-width: 780px; margin: 40px auto; padding: 28px; background: #fff; border-radius: 16px; box-shadow: var(--shadow-md); }
+.portal-brand { font-family: var(--font-mono); font-size: 11px; letter-spacing: .22em; color: var(--amber-500); text-transform: uppercase; }
+.portal-title { font-family: var(--font-serif); font-size: 28px; margin: 4px 0 0; }
+.portal-sub { color: var(--ink-500); margin-bottom: 20px; }
+.portal-footer { color: var(--ink-500); font-size: 12px; margin-top: 24px; border-top: 1px solid var(--ink-100); padding-top: 14px; }
+
+.ai-hint { display:inline-flex; align-items:center; gap:6px; background: var(--sky-100); color: var(--sky-600); padding: 3px 8px; border-radius: 999px; font-family: var(--font-mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+.btn.ai { background: linear-gradient(135deg, #4f46e5, #0369a1); }
 
 .btn-row { display:flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
 .status-line { display:flex; align-items:center; gap: 10px; margin: 8px 0; font-size: 13px; }

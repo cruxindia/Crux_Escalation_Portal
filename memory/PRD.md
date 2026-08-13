@@ -30,10 +30,11 @@ Crux Risk Management Pvt Ltd needs a small, production-ready internal tool to au
 12. Progressive-disclosure UI, responsive down to mobile widths, distinctive ink+amber palette, calm density.
 
 ## What's Implemented
-- **v1.0.0 (2026-01-15)** — full spec coverage per problem statement.
-- **v1.1.0 (2026-01-15)** — backlog delivery: CSV export (Logs → ⬇ Export CSV), Escalation attachments (drop-zone on Raise Escalation with 20MB limit), Monthly Summary Digest (job `MONTHLY_SUMMARY`, day 2 at 09:00 IST, all active admins), CI Auto-Push (GitHub Actions + clasp, see `CI_CD.md`).
+- **v1.0.0** — full spec coverage per problem statement.
+- **v1.1.0** — CSV export, escalation attachments, monthly summary digest, CI auto-push.
+- **v1.2.0** — Attachment size bar (live), digest extra recipients (`SUMMARY_EXTRA_RECIPIENTS`), log date/status/search filters (with CSV pre-scope), read-only tokenised client portal (`?view=portal`), Gemini AI (Draft escalation, Classify severity, Monthly insight paragraph, Ask-my-data chat) — see `AI.md`.
 
-See `apps-script/CHANGE_REGISTER.md` for the detailed register and `apps-script/ACCEPTANCE_TESTS.md` for the 36-test acceptance matrix.
+See `apps-script/CHANGE_REGISTER.md` for the detailed register and `apps-script/ACCEPTANCE_TESTS.md` for the 46-test acceptance matrix.
 
 ## Deliverables
 Located in `/app/apps-script/`:

@@ -2,6 +2,20 @@
 
 Tracks what was built, what was intentionally deferred, and what remains open. Grows over time.
 
+## v1.2.0 — 2026-01-15 (backlog + AI)
+
+- **Attachment size bar** — Live gradient progress bar under the drop-zone in *Raise escalation*: shows used/free bytes, file count, and percentage. Bar switches to amber at 75 % and rose at 95 %. Human-friendly size formatting (B → KB → MB).
+- **Digest extra recipients** — New setting `SUMMARY_EXTRA_RECIPIENTS` (comma-separated). Added on top of active ADMIN users + `ESCALATION_MANAGER` for the monthly digest email. Deduped.
+- **Log filters** — Date-range (`from` / `to`), status/result filter, and free-text contains filter on the Logs page. Applied server-side and included in the *⬇ Export CSV* payload so month-end exports come pre-scoped.
+- **Client portal** — Tokenised, read-only public URL (`?view=portal&c=<id>&t=<HMAC>`) per client showing the current 5-level matrix + branch directory. Admins can copy the link from the client detail page. Portal secret rotate button invalidates every existing link at once. See DEPLOYMENT.md §12 for access-mode caveats.
+- **Gemini AI (four features)** — `Gemini.gs` wraps the Gemini REST API via `UrlFetchApp`. API key stored in Script Properties (never exposed to the browser).
+  - **Draft with AI**: fills Description + Required resolution from a short brief on the *Raise escalation* form.
+  - **Suggest category & severity**: Gemini reads a logged escalation's description and auto-picks Category, Severity + writes a suggested action.
+  - **Monthly digest insight paragraph**: the summary email now includes a highlighted "What changed / what to watch" section written by Gemini, based on that month's stats and failed-send samples.
+  - **Ask my data chat**: admin-facing chat grounded in the last 60 days of `EMAIL_LOG` + `ESCALATIONS` aggregates.
+  - All features fail-soft: missing/disabled/errored key leaves the app fully usable without AI.
+  - Full docs in `AI.md`.
+
 ## v1.1.0 — 2026-01-15 (backlog delivery)
 
 - **CSV Export** — `admin.export.csv` server RPC + *Export CSV* button on the Logs page. Downloads a proper RFC-4180 CSV of `EMAIL_LOG` / `AUDIT_LOG` / `REMINDER_LOG` (extensible to any schema table). Server-side generation so admins get *all* rows, not just what's on screen; empty and quoted-comma cells are handled correctly.

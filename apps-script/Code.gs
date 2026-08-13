@@ -24,14 +24,72 @@
  * Never trust anything from the browser.
  */
 
-/** Web-app entrypoint. Serves the SPA shell. */
+/** Web-app entrypoint. Serves the SPA shell — or the read-only portal. */
 function doGet(e) {
+  var params = (e && e.parameter) || {};
+  if (params.view === 'portal') return renderPortal_(params);
   var tpl = HtmlService.createTemplateFromFile('Index');
   tpl.bootstrap = JSON.stringify(getBootstrap_());
   return tpl.evaluate()
     .setTitle('Crux — Client Escalation Matrix')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+/** Renders the tokenised read-only client portal view. */
+function renderPortal_(params) {
+  var body = '';
+  try {
+    var data = getPortalPayload_(params.c, params.t);
+    body = renderPortalHtml_(data);
+  } catch (err) {
+    body = '<div class="portal-brand">Access</div>' +
+      '<div class="portal-title">Link unavailable</div>' +
+      '<p class="portal-sub">' + (err && err.message ? String(err.message) : 'This link is not valid.') + '</p>' +
+      '<p class="portal-footer">If you believe this is an error, please contact your Crux relationship manager.</p>';
+  }
+  var tpl = HtmlService.createTemplateFromFile('Portal');
+  tpl.body = body;
+  return tpl.evaluate()
+    .setTitle('Escalation Matrix')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+function renderPortalHtml_(d) {
+  var matrixRows = d.matrix.map(function(m) {
+    return '<tr>' +
+      '<td style="border:1px solid #d0d7de;padding:8px 12px;font-family:Georgia,serif;color:#b25a00">' + m.Level + '</td>' +
+      '<td style="border:1px solid #d0d7de;padding:8px 12px"><b>' + escHtml_(m.LevelName) + '</b></td>' +
+      '<td style="border:1px solid #d0d7de;padding:8px 12px">' + escHtml_(m.ContactName || '—') + '</td>' +
+      '<td style="border:1px solid #d0d7de;padding:8px 12px">' + escHtml_(m.Mobile || '—') + '</td>' +
+      '<td style="border:1px solid #d0d7de;padding:8px 12px">' + escHtml_(m.Email || '—') + '</td>' +
+      '</tr>';
+  }).join('');
+  var branchRows = d.branches.map(function(b) {
+    return '<tr>' +
+      '<td style="border:1px solid #d0d7de;padding:6px 10px;font-family:ui-monospace,monospace;font-size:12px">' + escHtml_(b.BranchCode || '—') + '</td>' +
+      '<td style="border:1px solid #d0d7de;padding:6px 10px"><b>' + escHtml_(b.BranchName || '—') + '</b><br><span style="color:#5b6473;font-size:12px">' + escHtml_(b.Address || '') + '</span></td>' +
+      '<td style="border:1px solid #d0d7de;padding:6px 10px">' + escHtml_(b.CruxPOCName || '—') + '<br><span style="color:#5b6473;font-size:12px">' + escHtml_(b.CruxPOCMobile || '') + ' · ' + escHtml_(b.CruxPOCEmail || '') + '</span></td>' +
+      '</tr>';
+  }).join('');
+  return '<div class="portal-brand">' + escHtml_(d.company) + '</div>' +
+    '<h1 class="portal-title">' + escHtml_(d.client.ClientName) + '</h1>' +
+    '<div class="portal-sub">Client Escalation Matrix' + (d.client.ClientCode ? ' · <span class="mono">' + escHtml_(d.client.ClientCode) + '</span>' : '') + '</div>' +
+    '<table style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:14px">' +
+      '<thead style="background:#f6f8fa"><tr>' +
+        '<th style="border:1px solid #d0d7de;padding:8px 12px;text-align:left">#</th>' +
+        '<th style="border:1px solid #d0d7de;padding:8px 12px;text-align:left">Level</th>' +
+        '<th style="border:1px solid #d0d7de;padding:8px 12px;text-align:left">Name</th>' +
+        '<th style="border:1px solid #d0d7de;padding:8px 12px;text-align:left">Mobile</th>' +
+        '<th style="border:1px solid #d0d7de;padding:8px 12px;text-align:left">Email</th>' +
+      '</tr></thead><tbody>' + matrixRows + '</tbody>' +
+    '</table>' +
+    (branchRows ? '<h3 style="margin-top:22px;font-family:Georgia,serif;font-weight:500">Branch directory</h3>' +
+      '<table style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:13px">' +
+        '<thead style="background:#f6f8fa"><tr><th style="border:1px solid #d0d7de;padding:6px 10px;text-align:left">Code</th><th style="border:1px solid #d0d7de;padding:6px 10px;text-align:left">Branch</th><th style="border:1px solid #d0d7de;padding:6px 10px;text-align:left">Crux Point of Contact</th></tr></thead><tbody>' +
+        branchRows + '</tbody></table>' : '') +
+    '<div class="portal-footer">Last updated ' + escHtml_(d.client.UpdatedAt || '—') + ' · generated ' + escHtml_(d.generatedAt) + '. This is a live, read-only view — bookmark this page to always see the current matrix.</div>';
 }
 
 /** Include another HTML file (used by templating). */
@@ -153,7 +211,18 @@ var RPC_ROUTES = {
   'admin.export.csv':     { roles: ['ADMIN','MANAGER'], fn: function(p, me) { return exportCsv_(p); } },
   'admin.automation.status': { roles: ['ADMIN','MANAGER'], fn: function(p, me) { return automationStatus_(); } },
   'admin.setup.seed':     { roles: ['ADMIN'], fn: function(p, me) { return seedDemoData_(me); } },
-  'admin.setup.triggers': { roles: ['ADMIN'], fn: function(p, me) { return installTriggers_(); } }
+  'admin.setup.triggers': { roles: ['ADMIN'], fn: function(p, me) { return installTriggers_(); } },
+
+  // Portal (read-only tokenised client link)
+  'portal.getLink':       { roles: ['ADMIN','MANAGER','LOCATION_HEAD'], fn: function(p, me) { return portalUrl_(p, me); } },
+  'portal.rotate':        { roles: ['ADMIN'], fn: function(p, me) { return portalRotate_(me); } },
+
+  // Gemini AI
+  'ai.status':            { roles: ['ADMIN','MANAGER','LOCATION_HEAD','VIEWER'], fn: function(p, me) { return geminiStatus_(); } },
+  'ai.saveConfig':        { roles: ['ADMIN'], fn: function(p, me) { return geminiSaveConfig_(p, me); } },
+  'ai.classifyEscalation':{ roles: ['ADMIN','LOCATION_HEAD','MANAGER'], fn: function(p, me) { return aiClassifyEscalation_(p, me); } },
+  'ai.draftEscalation':   { roles: ['ADMIN','LOCATION_HEAD','MANAGER'], fn: function(p, me) { return aiDraftEscalation_(p, me); } },
+  'ai.chat':              { roles: ['ADMIN','MANAGER'], fn: function(p, me) { return aiChat_(p, me); } }
 };
 
 /* =========================================================================
@@ -187,6 +256,9 @@ function setup() {
     });
   }
   installTriggers_();
+  ensurePortalSecret_();
   Logger.log('Setup complete. Spreadsheet: ' + ss.getUrl());
+  Logger.log('Web-app URL will be available after Deploy → New deployment.');
+  Logger.log('To enable Gemini AI: open the app → Admin → AI → paste API key.');
   return ss.getUrl();
 }

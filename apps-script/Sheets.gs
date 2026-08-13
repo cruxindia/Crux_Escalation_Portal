@@ -36,6 +36,7 @@ var DEFAULT_SETTINGS = [
   ['DEFAULT_CC','','Default CC (comma separated)'],
   ['DEFAULT_BCC','','Default BCC (comma separated)'],
   ['ESCALATION_MANAGER','','Internal escalation recipient (email)'],
+  ['SUMMARY_EXTRA_RECIPIENTS','','Extra recipients for the monthly digest (comma-separated). Added in addition to all active ADMINs.'],
   ['RETRY_LIMIT','3','Max email retry attempts'],
   ['DRY_RUN','false','If true, override all recipients with TEST_EMAIL_OVERRIDE'],
   ['TEST_EMAIL_OVERRIDE','','Recipient used when DRY_RUN is true'],
@@ -269,15 +270,49 @@ function logAudit_(o) {
 
 function queryEmailLog_(p) {
   var rows = readTable_('EMAIL_LOG');
-  return paginate_(applyFilters_(rows, p && p.filters), p);
+  rows = applyLogFilters_(rows, p && p.filters);
+  return paginate_(rows, p);
 }
 function queryAuditLog_(p) {
   var rows = readTable_('AUDIT_LOG');
-  return paginate_(applyFilters_(rows, p && p.filters), p);
+  rows = applyLogFilters_(rows, p && p.filters);
+  return paginate_(rows, p);
 }
 function queryReminderLog_(p) {
   var rows = readTable_('REMINDER_LOG');
+  rows = applyLogFilters_(rows, p && p.filters);
   return paginate_(rows, p);
+}
+
+/**
+ * Rich filter for log tables. Recognised keys:
+ *   dateFrom / dateTo — YYYY-MM-DD, compared against the row's timestamp field.
+ *   Status            — exact match (SENT / FAILED / …).
+ *   Any other key     — substring match against the same column name.
+ */
+function applyLogFilters_(rows, f) {
+  if (!f) return rows;
+  var dateFrom = f.dateFrom || '';
+  var dateTo = f.dateTo || '';
+  var status = f.Status || '';
+  var timeField = rows.length && (rows[0].Timestamp !== undefined ? 'Timestamp' : (rows[0].ExecutedAt !== undefined ? 'ExecutedAt' : ''));
+  return rows.filter(function(r) {
+    if (dateFrom && timeField) {
+      var ts = String(r[timeField] || '').slice(0, 10);
+      if (ts < dateFrom) return false;
+    }
+    if (dateTo && timeField) {
+      var ts2 = String(r[timeField] || '').slice(0, 10);
+      if (ts2 > dateTo) return false;
+    }
+    if (status && String(r.Status || r.Result || '') !== status) return false;
+    return Object.keys(f).every(function(k) {
+      if (['dateFrom','dateTo','Status'].indexOf(k) !== -1) return true;
+      var v = f[k];
+      if (v === '' || v == null) return true;
+      return String(r[k] || '').toLowerCase().indexOf(String(v).toLowerCase()) !== -1;
+    });
+  });
 }
 
 /**
@@ -289,7 +324,11 @@ function exportCsv_(payload) {
   var table = payload && payload.table;
   if (!SCHEMA[table]) throw ValidationError_('Unknown table: ' + table);
   var rows = readTable_(table);
-  if (payload && payload.filters) rows = applyFilters_(rows, payload.filters);
+  if (payload && payload.filters) {
+    // Log-shaped filters (date range + status) for log tables; substring for others.
+    if (['EMAIL_LOG','AUDIT_LOG','REMINDER_LOG'].indexOf(table) !== -1) rows = applyLogFilters_(rows, payload.filters);
+    else rows = applyFilters_(rows, payload.filters);
+  }
   var headers = SCHEMA[table];
   var lines = [headers.map(csvCell_).join(',')];
   rows.forEach(function(r){ lines.push(headers.map(function(h){ return csvCell_(r[h]); }).join(',')); });

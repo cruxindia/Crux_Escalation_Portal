@@ -290,6 +290,7 @@
       var actions = document.getElementById('client-actions');
       if (canEdit()) {
         actions.appendChild(h('button',{class:'btn secondary small', testid:'btn-edit-client', onclick: function(){ openClientForm(c); }},['Edit client']));
+        actions.appendChild(h('button',{class:'btn secondary small', style:'margin-left:8px', testid:'btn-portal-link', onclick: function(){ openPortalLink(c.ClientID); }},['🔗 Client portal link']));
       }
       // Tabs
       var tabs = ['Overview','Branches','Escalation Matrix'];
@@ -597,7 +598,8 @@
             '<div class="field"><label>Target date</label><input id="e-tgt" type="date"></div>'+
           '</div>'+
           '<div class="field"><label>Description</label><textarea id="e-desc" data-testid="input-esc-description"></textarea></div>'+
-          '<div class="field"><label>Required action</label><textarea id="e-action" data-testid="input-esc-action"></textarea></div>',
+          '<div class="field"><label>Required action</label><textarea id="e-action" data-testid="input-esc-action"></textarea></div>'+
+          '<div id="e-ai-slot" style="margin:6px 0"></div>',
         actions: [
           { label:'Cancel', kind:'secondary', close:true },
           { label:'Log escalation', testid:'submit-log-escalation', onClick: function() {
@@ -612,6 +614,16 @@
           }}
         ]
       });
+      // Wire AI classifier into the modal.
+      if (aiEnabled()) {
+        var slot = document.getElementById('e-ai-slot');
+        slot.innerHTML = '';
+        var btn = h('button',{class:'btn ai small', testid:'btn-ai-classify', onclick: function(){ aiClassifyRun(); }}, ['✨ Suggest category & severity']);
+        slot.appendChild(btn);
+        slot.appendChild(document.createTextNode(' '));
+        slot.appendChild(aiHint());
+        slot.appendChild(h('div',{id:'e-ai-out', class:'muted', style:'margin-top:6px;font-size:12px'}, []));
+      }
     });
   }
   function openRaiseEscalation() {
@@ -630,6 +642,7 @@
           '<div class="field"><label>Person/team concerned</label><input id="r-person" data-testid="input-raise-person"></div>'+
           '<div class="field"><label>Details</label><textarea id="r-details" data-testid="input-raise-details"></textarea></div>'+
           '<div class="field"><label>Required resolution</label><textarea id="r-resolution" data-testid="input-raise-resolution"></textarea></div>'+
+          '<div class="field"><label>AI brief (optional) — one line describing the issue</label><textarea id="r-brief" data-testid="input-raise-brief" placeholder="e.g. Client received wrong statement on 3rd; disputes ₹2.1L reversal…" style="min-height:60px"></textarea><div id="r-ai-slot" style="margin-top:4px"></div></div>'+
           '<div class="form-row"><div class="field"><label>To (comma-separated)*</label><input id="r-to" data-testid="input-raise-to"></div>'+
           '<div class="field"><label>CC (comma-separated)</label><input id="r-cc" data-testid="input-raise-cc"></div></div>'+
           '<div class="field"><label>Attachments (PDF, images, documents up to 20MB total)</label>'+
@@ -637,6 +650,10 @@
               '<input type="file" id="r-files" multiple style="display:none" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.xls,.xlsx,.txt,.csv" data-testid="input-attachments">'+
               '<div>Drag files here or <a href="#" id="r-pick">browse</a></div>'+
               '<div id="r-att-list" class="muted" style="margin-top:8px;font-size:12px"></div>'+
+              '<div class="att-bar" data-testid="attachment-bar" style="margin-top:10px">'+
+                '<div class="att-bar-track"><div id="r-att-fill" class="att-bar-fill" style="width:0%"></div></div>'+
+                '<div id="r-att-meta" class="att-bar-meta">0 KB used · 20.0 MB free · 0 files</div>'+
+              '</div>'+
             '</div>'+
           '</div>',
         actions: [
@@ -666,6 +683,16 @@
       ['dragenter','dragover'].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); e.stopPropagation(); drop.classList.add('dragging'); }); });
       ['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); e.stopPropagation(); drop.classList.remove('dragging'); }); });
       drop.addEventListener('drop', function(e){ ingestFiles(e.dataTransfer.files); });
+      // AI Draft slot
+      if (aiEnabled()) {
+        var aiSlot = document.getElementById('r-ai-slot');
+        aiSlot.innerHTML = '';
+        var btn = h('button',{class:'btn ai small', testid:'btn-ai-draft', onclick: function(){ aiDraftRun(); }},['✨ Draft with AI']);
+        aiSlot.appendChild(btn);
+        aiSlot.appendChild(document.createTextNode(' '));
+        aiSlot.appendChild(aiHint());
+        aiSlot.appendChild(h('div',{id:'r-ai-out', class:'muted', style:'margin-top:6px;font-size:12px'}, []));
+      }
     });
   }
   function ingestFiles(fileList) {
@@ -685,13 +712,89 @@
     });
     function renderAttList() {
       list.innerHTML = Routes._raiseAttachments.map(function(a, i){
-        return '<div>📎 '+esc(a.name)+' <span class="muted">('+Math.round(a._size/1024)+' KB)</span> <a href="#" data-i="'+i+'" class="rm-att">remove</a></div>';
+        return '<div>📎 '+esc(a.name)+' <span class="muted">('+prettySize(a._size)+')</span> <a href="#" data-i="'+i+'" class="rm-att">remove</a></div>';
       }).join('');
       list.querySelectorAll('.rm-att').forEach(function(el){
         el.addEventListener('click', function(e){ e.preventDefault(); Routes._raiseAttachments.splice(parseInt(el.getAttribute('data-i'),10), 1); renderAttList(); });
       });
+      updateAttBar();
     }
+    updateAttBar();
   }
+  function updateAttBar() {
+    var TOTAL_LIMIT = 20 * 1024 * 1024;
+    var fill = document.getElementById('r-att-fill');
+    var meta = document.getElementById('r-att-meta');
+    if (!fill || !meta) return;
+    var used = Routes._raiseAttachments.reduce(function(s,a){ return s + (a._size||0); }, 0);
+    var pct = Math.min(100, Math.round((used / TOTAL_LIMIT) * 100));
+    fill.style.width = pct + '%';
+    fill.className = 'att-bar-fill' + (pct >= 95 ? ' err' : (pct >= 75 ? ' warn' : ''));
+    meta.innerHTML = '<span>'+prettySize(used)+' used · '+prettySize(TOTAL_LIMIT - used)+' free</span>' +
+      '<span>'+Routes._raiseAttachments.length+' file' + (Routes._raiseAttachments.length === 1 ? '' : 's') + ' · '+pct+'%</span>';
+  }
+  function prettySize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024*1024) return (bytes/1024).toFixed(bytes<10240?1:0) + ' KB';
+    return (bytes/1024/1024).toFixed(bytes<10485760?2:1) + ' MB';
+  }
+  function openPortalLink(clientId) {
+    rpc('portal.getLink', { clientId: clientId }).then(function(res){
+      Modal.open({
+        title: 'Client portal link',
+        body: '<p>Share this signed, read-only link with the client. It always shows the current matrix — no login required (subject to Web-app access setting).</p>' +
+          '<div class="field"><label>Signed URL</label><input id="portal-url" data-testid="input-portal-url" value="'+esc(res.url)+'" readonly></div>' +
+          '<div class="callout">'+esc(res.note)+'</div>' +
+          '<div class="muted" style="margin-top:8px;font-size:12px">'+esc(res.revokeHint)+'</div>',
+        actions: [
+          { label:'Close', kind:'secondary', close:true },
+          { label:'Copy link', testid:'btn-copy-portal-link', onClick: function() {
+            var el = document.getElementById('portal-url'); el.select(); el.setSelectionRange(0, el.value.length);
+            try { document.execCommand('copy'); toast('Link copied','ok'); } catch (e) { toast('Copy manually','err'); }
+          }},
+          { label:'Open', testid:'btn-open-portal', onClick: function() { window.open(document.getElementById('portal-url').value, '_blank'); } }
+        ]
+      });
+    }).catch(function(e){ toast(e.message,'err'); });
+  }
+
+  /* ============ AI HELPERS ============ */
+  function aiEnabled() { return state.ai && state.ai.configured && state.ai.enabled; }
+  function aiHint() { return h('span',{class:'ai-hint'},['✨ AI ' + (state.ai && state.ai.model || 'Gemini')]); }
+
+  function aiClassifyRun() {
+    var desc = val('e-desc');
+    if (!desc || desc.length < 15) { toast('Please write at least a sentence first','err'); return; }
+    var out = document.getElementById('e-ai-out');
+    out.textContent = 'Thinking…';
+    rpc('ai.classifyEscalation', { description: desc }).then(function(r){
+      // Apply if user hasn't touched fields
+      var catSel = document.getElementById('e-cat'); var sevSel = document.getElementById('e-sev');
+      if (r.category) { for (var i=0;i<catSel.options.length;i++) if (catSel.options[i].value === r.category) { catSel.selectedIndex = i; break; } }
+      if (r.severity) { for (var j=0;j<sevSel.options.length;j++) if (sevSel.options[j].value === r.severity) { sevSel.selectedIndex = j; break; } }
+      if (r.suggestedAction) {
+        var ea = document.getElementById('e-action');
+        if (!ea.value.trim()) ea.value = r.suggestedAction;
+      }
+      out.textContent = 'Suggested: ' + r.category + ' · ' + r.severity + ' — ' + (r.reason || '');
+    }).catch(function(e){ out.textContent = 'AI: ' + e.message; });
+  }
+
+  function aiDraftRun() {
+    var brief = val('r-brief');
+    if (!brief || brief.length < 10) { toast('Add a short brief for the AI','err'); return; }
+    var out = document.getElementById('r-ai-out');
+    out.textContent = 'Drafting…';
+    rpc('ai.draftEscalation', {
+      brief: brief, ClientID: val('r-client'),
+      category: val('r-cat'), severity: val('r-sev')
+    }).then(function(r){
+      if (r.description) document.getElementById('r-details').value = r.description;
+      if (r.requiredResolution) document.getElementById('r-resolution').value = r.requiredResolution;
+      out.textContent = 'AI drafted the description and required resolution. Please review before sending.';
+    }).catch(function(e){ out.textContent = 'AI: ' + e.message; });
+  }
+
   function openEscalationDetail(e) {
     var body = '<div class="kv"><span class="k">ID</span><span class="mono">'+esc(e.EscalationID)+'</span></div>'+
       '<div class="kv"><span class="k">Type</span><span>'+e.Type+'</span></div>'+
@@ -716,7 +819,7 @@
   Routes.admin = function(root) {
     if (!isAdmin()) { root.appendChild(h('div',{class:'callout err'},['Admin only.'])); return; }
     root.appendChild(h('div',{class:'pageheader'},[h('div',{},[h('h1',{},['Admin']), h('div',{class:'sub'},['Configuration, users, holidays, templates and controls.'])])]));
-    var tabs = ['Users','Settings','Templates','Holidays','Automation','Setup'];
+    var tabs = ['Users','Settings','Templates','Holidays','Automation','AI','Setup'];
     var current = state.routeParams.tab || 'Users';
     root.appendChild(h('div',{class:'tabs'}, tabs.map(function(t){ return h('div',{class:'tab'+(current===t?' active':''), testid:'tab-admin-'+t.toLowerCase(), onclick: function(){ state.routeParams.tab = t; render(); }},[t]); })));
     var body = h('div',{},[]); root.appendChild(body);
@@ -725,6 +828,7 @@
     else if (current === 'Templates') renderAdminTemplates(body);
     else if (current === 'Holidays') renderAdminHolidays(body);
     else if (current === 'Automation') renderAdminAutomation(body);
+    else if (current === 'AI') renderAdminAI(body);
     else renderAdminSetup(body);
   };
   function renderAdminUsers(body) {
@@ -856,6 +960,75 @@
       ]));
     });
   }
+  function renderAdminAI(body) {
+    body.innerHTML = '<div class="empty">Loading…</div>';
+    rpc('ai.status').then(function(s){
+      state.ai = s;
+      body.innerHTML = '';
+      var card = h('div',{class:'card'},[]);
+      card.appendChild(h('h3',{},['Gemini AI configuration', aiHint()]));
+      card.appendChild(kvRow('Configured', s.configured ? 'YES' : 'NO'));
+      card.appendChild(kvRow('Enabled', s.enabled ? 'YES' : 'NO'));
+      card.appendChild(kvRow('Model', s.model));
+      card.appendChild(kvRow('Key (preview)', s.keyPreview || '—'));
+      card.appendChild(h('div',{class:'form-row'},[
+        h('div',{class:'field'},[h('label',{},['API key (Google AI Studio or Emergent Universal key)']), h('input',{ id:'ai-key', testid:'input-ai-key', placeholder:'paste to update, leave blank to keep' })]),
+        h('div',{class:'field'},[h('label',{},['Model']), h('input',{ id:'ai-model', testid:'input-ai-model', value: s.model })])
+      ]));
+      card.appendChild(h('div',{class:'form-row'},[
+        h('div',{class:'field'},[h('label',{},['Enabled']), h('select',{ id:'ai-enabled', testid:'select-ai-enabled' },[
+          h('option',{ value:'true', selected: s.enabled ? 'selected' : null },['ENABLED']),
+          h('option',{ value:'false', selected: !s.enabled ? 'selected' : null },['DISABLED'])
+        ])])
+      ]));
+      card.appendChild(h('div',{class:'btn-row'},[
+        h('button',{class:'btn ai', testid:'btn-save-ai', onclick: function(){
+          var payload = { model: val('ai-model'), enabled: val('ai-enabled') === 'true' };
+          if (val('ai-key')) payload.apiKey = val('ai-key');
+          rpc('ai.saveConfig', payload).then(function(){ toast('AI config saved','ok'); renderAdminAI(body); }).catch(function(e){ toast(e.message,'err'); });
+        }},['Save AI config'])
+      ]));
+      body.appendChild(card);
+      // Chat panel
+      if (s.configured && s.enabled) {
+        var chatCard = h('div',{class:'card'},[]);
+        chatCard.appendChild(h('h3',{},['Ask my data', aiHint()]));
+        chatCard.appendChild(h('div',{class:'muted', style:'font-size:12px;margin-bottom:8px'},['Answers are grounded in the last 60 days of email and escalation logs. Nothing here is a substitute for the actual logs — always verify from the dashboards for compliance-critical decisions.']));
+        var chat = h('div',{id:'ai-chat-window', class:'chat-window', testid:'ai-chat-window'}, []);
+        chatCard.appendChild(chat);
+        chatCard.appendChild(h('div',{class:'chat-input', style:'margin-top:8px'},[
+          h('input',{ id:'ai-chat-input', testid:'input-ai-chat', placeholder:'e.g. Which clients had failed emails last month?', onkeydown: function(e){ if (e.key === 'Enter') sendChat(); } }),
+          h('button',{class:'btn ai', testid:'btn-send-chat', onclick: sendChat},['Send'])
+        ]));
+        body.appendChild(chatCard);
+        state.chatMessages = state.chatMessages || [];
+        redrawChat();
+      }
+      function sendChat() {
+        var input = document.getElementById('ai-chat-input');
+        var text = input.value.trim(); if (!text) return;
+        input.value = '';
+        state.chatMessages.push({ role:'user', text: text });
+        state.chatMessages.push({ role:'ai', text: '…' });
+        redrawChat();
+        rpc('ai.chat', { messages: state.chatMessages.filter(function(m){ return m.text !== '…'; }) }).then(function(r){
+          state.chatMessages[state.chatMessages.length - 1] = { role:'ai', text: r.text };
+          redrawChat();
+        }).catch(function(e){
+          state.chatMessages[state.chatMessages.length - 1] = { role:'sys', text: 'AI error: ' + e.message };
+          redrawChat();
+        });
+      }
+      function redrawChat() {
+        var w = document.getElementById('ai-chat-window'); if (!w) return;
+        w.innerHTML = '';
+        if (!state.chatMessages.length) w.appendChild(h('div',{class:'chat-msg sys'},['Try: "How many dispatches failed last month?" or "List clients with the most failed emails."']));
+        state.chatMessages.forEach(function(m){ w.appendChild(h('div',{class:'chat-msg '+m.role, testid:'chat-msg-'+m.role},[m.text])); });
+        w.scrollTop = w.scrollHeight;
+      }
+    }).catch(function(e){ body.innerHTML = ''; body.appendChild(h('div',{class:'callout err'},[e.message])); });
+  }
+
   function renderAdminSetup(body) {
     body.innerHTML = '';
     body.appendChild(h('div',{class:'card'},[
@@ -863,7 +1036,11 @@
       h('p',{class:'muted'},['Install the tick trigger, then optionally seed demo data.']),
       h('div',{class:'btn-row'},[
         h('button',{class:'btn', testid:'btn-install-triggers', onclick: function(){ rpc('admin.setup.triggers').then(function(){ toast('Trigger installed','ok'); render(); }).catch(function(e){ toast(e.message,'err'); }); }},['Install tick trigger']),
-        h('button',{class:'btn secondary', testid:'btn-seed-demo', onclick: function(){ rpc('admin.setup.seed').then(function(r){ toast(r.seeded ? 'Seeded '+r.clients+' clients' : 'Already has data','ok'); }).catch(function(e){ toast(e.message,'err'); }); }},['Seed demo data'])
+        h('button',{class:'btn secondary', testid:'btn-seed-demo', onclick: function(){ rpc('admin.setup.seed').then(function(r){ toast(r.seeded ? 'Seeded '+r.clients+' clients' : 'Already has data','ok'); }).catch(function(e){ toast(e.message,'err'); }); }},['Seed demo data']),
+        h('button',{class:'btn danger', testid:'btn-rotate-portal', onclick: function(){
+          if (!confirm('This will invalidate ALL existing client portal links. Continue?')) return;
+          rpc('portal.rotate').then(function(){ toast('Portal secret rotated','ok'); }).catch(function(e){ toast(e.message,'err'); });
+        }},['🔒 Rotate portal secret'])
       ])
     ]));
   }
@@ -879,15 +1056,48 @@
     var tabs = ['Email','Audit','Reminders'];
     var current = state.routeParams.tab || 'Email';
     root.appendChild(h('div',{class:'tabs'}, tabs.map(function(t){ return h('div',{class:'tab'+(current===t?' active':''), testid:'tab-log-'+t.toLowerCase(), onclick: function(){ state.routeParams.tab = t; render(); }},[t]); })));
+    // Filter bar
+    var filters = state.routeParams.logFilters || (state.routeParams.logFilters = {});
+    var filterBar = h('div',{class:'card', style:'padding:12px 14px;margin-bottom:12px'},[
+      h('div',{style:'display:flex;gap:10px;flex-wrap:wrap;align-items:end'},[
+        h('div',{class:'field', style:'margin:0;min-width:150px'},[h('label',{},['From date']), h('input',{ type:'date', testid:'log-filter-from', value: filters.dateFrom || '', oninput: function(e){ filters.dateFrom = e.target.value; } })]),
+        h('div',{class:'field', style:'margin:0;min-width:150px'},[h('label',{},['To date']), h('input',{ type:'date', testid:'log-filter-to', value: filters.dateTo || '', oninput: function(e){ filters.dateTo = e.target.value; } })]),
+        current === 'Email' ? h('div',{class:'field', style:'margin:0;min-width:140px'},[h('label',{},['Status']), h('select',{ testid:'log-filter-status', onchange: function(e){ filters.Status = e.target.value; }},[
+          h('option',{ value:'', selected: !filters.Status ? 'selected' : null},['(all)']),
+          h('option',{ value:'SENT', selected: filters.Status==='SENT' ? 'selected' : null },['SENT']),
+          h('option',{ value:'FAILED', selected: filters.Status==='FAILED' ? 'selected' : null },['FAILED']),
+          h('option',{ value:'PENDING', selected: filters.Status==='PENDING' ? 'selected' : null },['PENDING'])
+        ])]) : null,
+        current === 'Reminders' ? h('div',{class:'field', style:'margin:0;min-width:140px'},[h('label',{},['Result']), h('select',{ testid:'log-filter-result', onchange: function(e){ filters.Status = e.target.value; }},[
+          h('option',{ value:'', selected: !filters.Status ? 'selected' : null },['(all)']),
+          h('option',{ value:'OK', selected: filters.Status==='OK' ? 'selected' : null },['OK']),
+          h('option',{ value:'PARTIAL', selected: filters.Status==='PARTIAL' ? 'selected' : null },['PARTIAL'])
+        ])]) : null,
+        h('div',{class:'field', style:'margin:0;flex:1;min-width:200px'},[h('label',{},['Contains (any column)']), h('input',{ testid:'log-filter-q', placeholder:'search…', value: filters._q || '', oninput: function(e){ filters._q = e.target.value; } })]),
+        h('button',{class:'btn small', testid:'btn-apply-log-filters', onclick: function(){ render(); }},['Apply']),
+        h('button',{class:'btn secondary small', testid:'btn-clear-log-filters', onclick: function(){ state.routeParams.logFilters = {}; render(); }},['Clear'])
+      ])
+    ]);
+    root.appendChild(filterBar);
     var body = h('div',{},[]); root.appendChild(body);
-    if (current === 'Email') loadLog(body, 'admin.logs.email', ['Timestamp','Type','ClientID','ToAddr','Subject','Status','Error']);
-    else if (current === 'Audit') loadLog(body, 'admin.logs.audit', ['Timestamp','User','Action','Entity','EntityID']);
-    else loadLog(body, 'admin.logs.reminders', ['JobKey','Type','ExecutedAt','ExecutedBy','Result','Notes']);
+    var serverFilters = Object.assign({}, filters);
+    // Broadcast the free-text filter across common columns.
+    if (filters._q) {
+      if (current === 'Email') { serverFilters.Subject = filters._q; }
+      else if (current === 'Audit') { serverFilters.Action = filters._q; }
+      else { serverFilters.Notes = filters._q; }
+    }
+    delete serverFilters._q;
+    if (current === 'Email') loadLog(body, 'admin.logs.email', ['Timestamp','Type','ClientID','ToAddr','Subject','Status','Error'], serverFilters);
+    else if (current === 'Audit') loadLog(body, 'admin.logs.audit', ['Timestamp','User','Action','Entity','EntityID'], serverFilters);
+    else loadLog(body, 'admin.logs.reminders', ['JobKey','Type','ExecutedAt','ExecutedBy','Result','Notes'], serverFilters);
   };
   function exportCurrentLog() {
     var tab = state.routeParams.tab || 'Email';
     var table = tab === 'Email' ? 'EMAIL_LOG' : (tab === 'Audit' ? 'AUDIT_LOG' : 'REMINDER_LOG');
-    rpc('admin.export.csv', { table: table }).then(function(res){ downloadBase64(res.filename, res.mime, res.dataBase64); toast('Exported '+res.rowCount+' rows','ok'); }).catch(function(e){ toast(e.message,'err'); });
+    var filters = Object.assign({}, state.routeParams.logFilters || {});
+    delete filters._q;
+    rpc('admin.export.csv', { table: table, filters: filters }).then(function(res){ downloadBase64(res.filename, res.mime, res.dataBase64); toast('Exported '+res.rowCount+' rows','ok'); }).catch(function(e){ toast(e.message,'err'); });
   }
   function downloadBase64(filename, mime, base64) {
     var bin = atob(base64); var arr = new Uint8Array(bin.length);
@@ -897,24 +1107,31 @@
     var a = document.createElement('a'); a.href = url; a.download = filename; a.click();
     setTimeout(function(){ URL.revokeObjectURL(url); }, 500);
   }
-  function loadLog(body, action, cols) {
+  function loadLog(body, action, cols, filters) {
     body.innerHTML = '<div class="empty">Loading…</div>';
-    rpc(action, {}).then(function(res){
+    rpc(action, { filters: filters || {}, size: 500 }).then(function(res){
       body.innerHTML = '';
-      var t = h('table',{class:'table'},[h('thead',{},[h('tr',{}, cols.map(function(c){ return h('th',{},[c]); }))])]);
+      if (!res.rows.length) { body.appendChild(h('div',{class:'empty'},['No rows match your filters.'])); return; }
+      var t = h('table',{class:'table', testid:'table-log'},[h('thead',{},[h('tr',{}, cols.map(function(c){ return h('th',{},[c]); }))])]);
       var tb = h('tbody',{},[]);
       res.rows.forEach(function(r){
         tb.appendChild(h('tr',{class:'no-hover'}, cols.map(function(c){
           if (c === 'Status') return h('td',{},[h('span',{class:'badge '+(r[c]==='SENT'?'ok':(r[c]==='FAILED'?'err':'info'))},[String(r[c]||'')])]);
+          if (c === 'Result') return h('td',{},[h('span',{class:'badge '+(r[c]==='OK'?'ok':'warn')},[String(r[c]||'')])]);
           return h('td',{},[String(r[c] == null ? '' : r[c]).slice(0, 200)]);
         })));
       });
       t.appendChild(tb); body.appendChild(t);
+      body.appendChild(h('div',{class:'muted', style:'margin-top:8px'},[res.total + ' row(s) match']));
     }).catch(function(e){ body.innerHTML = ''; body.appendChild(h('div',{class:'callout err'},[e.message])); });
   }
 
   /* --------------------- Boot --------------------- */
   window.addEventListener('load', function() {
+    // Try loading AI status; fail silently.
+    if (state.user.active) {
+      rpc('ai.status').then(function(s){ state.ai = s; render(); }).catch(function(){});
+    }
     render();
   });
 })();
