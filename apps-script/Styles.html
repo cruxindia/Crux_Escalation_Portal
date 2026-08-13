@@ -187,6 +187,22 @@ h3 { font-size: 16px; }
 .ai-hint { display:inline-flex; align-items:center; gap:6px; background: var(--sky-100); color: var(--sky-600); padding: 3px 8px; border-radius: 999px; font-family: var(--font-mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
 .btn.ai { background: linear-gradient(135deg, #4f46e5, #0369a1); }
 
+/* Weekly snapshot cards */
+.snap-wrap { display:grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 4px; }
+@media (max-width: 900px) { .snap-wrap { grid-template-columns: 1fr; } }
+.snap-card { position: relative; background:#fff; border: 1px solid var(--ink-100); border-left: 4px solid var(--ink-500); border-radius: 10px; padding: 14px 16px; }
+.snap-card.high   { border-left-color: var(--rose-600); }
+.snap-card.medium { border-left-color: var(--amber-500); }
+.snap-card.low    { border-left-color: var(--emerald-600); }
+.snap-sev { display:inline-block; padding: 1px 8px; border-radius: 999px; font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+.snap-sev.high   { background: var(--rose-100); color: var(--rose-600); }
+.snap-sev.medium { background: var(--amber-100); color: var(--amber-600); }
+.snap-sev.low    { background: var(--emerald-100); color: var(--emerald-600); }
+.snap-title { font-family: var(--font-serif); font-size: 16px; margin: 6px 0 4px; }
+.snap-detail { color: var(--ink-700); font-size: 13px; }
+.snap-suggest { margin-top: 8px; padding: 6px 10px; background: var(--ink-50); border-radius: 6px; font-size: 12px; color: var(--ink-700); }
+.snap-suggest b { font-family: var(--font-mono); font-size: 10px; letter-spacing: .1em; color: var(--ink-500); text-transform: uppercase; display:block; margin-bottom: 2px; }
+
 .btn-row { display:flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
 .status-line { display:flex; align-items:center; gap: 10px; margin: 8px 0; font-size: 13px; }
 

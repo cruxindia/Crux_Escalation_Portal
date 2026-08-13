@@ -222,7 +222,8 @@ var RPC_ROUTES = {
   'ai.saveConfig':        { roles: ['ADMIN'], fn: function(p, me) { return geminiSaveConfig_(p, me); } },
   'ai.classifyEscalation':{ roles: ['ADMIN','LOCATION_HEAD','MANAGER'], fn: function(p, me) { return aiClassifyEscalation_(p, me); } },
   'ai.draftEscalation':   { roles: ['ADMIN','LOCATION_HEAD','MANAGER'], fn: function(p, me) { return aiDraftEscalation_(p, me); } },
-  'ai.chat':              { roles: ['ADMIN','MANAGER'], fn: function(p, me) { return aiChat_(p, me); } }
+  'ai.chat':              { roles: ['ADMIN','MANAGER'], fn: function(p, me) { return aiChat_(p, me); } },
+  'ai.weeklyAnomalies':   { roles: ['ADMIN','MANAGER'], fn: function(p, me) { return aiWeeklyAnomalies_(p); } }
 };
 
 /* =========================================================================

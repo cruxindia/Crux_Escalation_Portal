@@ -170,6 +170,19 @@
       h('div',{},[h('h1',{},['Dashboard']), h('div',{class:'sub'},[state.app.company])]),
       h('div',{},[ h('button',{class:'btn secondary small', onclick: openAutomation, testid:'btn-view-automation'},['View automation']) ])
     ]));
+    // Weekly AI snapshot for admins/managers.
+    if (aiEnabled() && (state.user.role === 'ADMIN' || state.user.role === 'MANAGER')) {
+      var snapCard = h('div',{class:'card', testid:'weekly-snapshot'},[]);
+      snapCard.appendChild(h('h3',{},['This week — AI spotted', aiHint(),
+        h('button',{class:'btn secondary small', style:'margin-left:auto', testid:'btn-refresh-snapshot', onclick: function(){ loadSnapshot(snapCard, true); }},['↻ Refresh'])
+      ]));
+      snapCard.appendChild(h('div',{class:'snap-wrap', id:'snap-wrap'},[
+        h('div',{class:'empty', style:'grid-column:1/-1;padding:12px'},['Loading anomalies…'])
+      ]));
+      snapCard.appendChild(h('div',{class:'muted', id:'snap-meta', style:'font-size:11px;margin-top:8px'},[]));
+      root.appendChild(snapCard);
+      loadSnapshot(snapCard, false);
+    }
     var container = h('div',{},[h('div',{class:'empty'},['Loading…'])]);
     root.appendChild(container);
     rpc('dashboard.summary').then(function(d){
@@ -206,6 +219,28 @@
       h('div',{class:'v'},[String(v == null ? '—' : v)]),
       d ? h('div',{class:'d'},[cls ? h('span',{class:'badge '+cls},[d]) : d]) : null
     ]);
+  }
+  function loadSnapshot(card, refresh) {
+    var wrap = card.querySelector('.snap-wrap');
+    var meta = card.querySelector('#snap-meta');
+    if (refresh) wrap.innerHTML = '<div class="empty" style="grid-column:1/-1;padding:12px">Refreshing…</div>';
+    rpc('ai.weeklyAnomalies', { refresh: !!refresh }).then(function(r){
+      wrap.innerHTML = '';
+      if (r.skipped) { wrap.innerHTML = '<div class="callout" style="grid-column:1/-1">Enable Gemini in <b>Admin → AI</b> to see weekly anomaly cards here.</div>'; meta.textContent = ''; return; }
+      if (r.error) { wrap.innerHTML = '<div class="callout err" style="grid-column:1/-1">AI unavailable: '+esc(r.error)+'</div>'; meta.textContent = ''; return; }
+      var items = r.anomalies || [];
+      if (!items.length) { wrap.innerHTML = '<div class="empty" style="grid-column:1/-1">No anomalies noted this week — nice and quiet.</div>'; }
+      items.forEach(function(a, i){
+        wrap.appendChild(h('div',{class:'snap-card '+a.severity, testid:'snap-card-'+i},[
+          h('span',{class:'snap-sev '+a.severity},[a.severity]),
+          h('div',{class:'snap-title'},[a.title || '—']),
+          h('div',{class:'snap-detail'},[a.detail || '']),
+          a.suggestion ? h('div',{class:'snap-suggest'},[h('b',{},['Try']), a.suggestion]) : null
+        ]));
+      });
+      var when = r.generatedAt || (r.ts ? new Date(r.ts).toLocaleString() : '');
+      meta.textContent = 'Generated ' + when + ' · cached up to 6h. Click ↻ Refresh to regenerate.';
+    }).catch(function(e){ wrap.innerHTML = ''; meta.textContent = 'AI: ' + e.message; });
   }
   function openAutomation() {
     rpc('admin.automation.status').then(function(a){

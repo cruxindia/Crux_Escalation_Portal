@@ -32,9 +32,10 @@ Crux Risk Management Pvt Ltd needs a small, production-ready internal tool to au
 ## What's Implemented
 - **v1.0.0** — full spec coverage per problem statement.
 - **v1.1.0** — CSV export, escalation attachments, monthly summary digest, CI auto-push.
-- **v1.2.0** — Attachment size bar (live), digest extra recipients (`SUMMARY_EXTRA_RECIPIENTS`), log date/status/search filters (with CSV pre-scope), read-only tokenised client portal (`?view=portal`), Gemini AI (Draft escalation, Classify severity, Monthly insight paragraph, Ask-my-data chat) — see `AI.md`.
+- **v1.2.0** — Attachment size bar, digest extra recipients, log filters, client portal, Gemini AI (draft, classify, monthly insight, chat).
+- **v1.3.0** — **Weekly Snapshot** — three pinned AI-anomaly cards on the Dashboard (ADMIN/MANAGER), server-cached 6h, refreshable, fail-soft.
 
-See `apps-script/CHANGE_REGISTER.md` for the detailed register and `apps-script/ACCEPTANCE_TESTS.md` for the 46-test acceptance matrix.
+See `apps-script/CHANGE_REGISTER.md` for the detailed register and `apps-script/ACCEPTANCE_TESTS.md` for the 50-test acceptance matrix.
 
 ## Deliverables
 Located in `/app/apps-script/`:

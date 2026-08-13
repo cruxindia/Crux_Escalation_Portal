@@ -32,6 +32,16 @@ The scheduled *Monthly Summary* email now includes a highlighted "**What changed
 
 Answers are grounded in the snapshot; Gemini is instructed to say so if the answer isn't in the data.
 
+### e) Weekly Snapshot — pinned Dashboard cards
+The **Dashboard** (ADMIN/MANAGER view) shows three pinned anomaly cards titled *"This week — AI spotted"*. Each card is Gemini's read of the last 7 days:
+
+- **Title** (3-6 words)
+- **Severity** (low / medium / high — colour-coded left border and pill)
+- **Detail** — one sentence citing a specific number or client
+- **Try …** — one imperative next-step suggestion
+
+Results are **cached in Script Properties for 6 hours** so the Dashboard never blocks on Gemini. Click **↻ Refresh** to regenerate immediately. If Gemini is disabled or errors, the card panel shows a soft callout without breaking the Dashboard.
+
 ## 3. Data safety
 
 - The chat snapshot uses **aggregates** (counts by client/status/type) and short samples of failed error messages — never the full email body, never attachment content.

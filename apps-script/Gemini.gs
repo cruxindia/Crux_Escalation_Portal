@@ -189,3 +189,91 @@ function aiSummaryInsight_(period, stats, incomplete, failedSamples) {
     return '';
   }
 }
+
+
+/* ------------------------------------------------------------------
+ * Feature: Weekly Snapshot — top-3 anomalies pinned on the Dashboard.
+ *
+ * We build a compact 7-day snapshot and ask Gemini for exactly 3 items
+ * as strict JSON. Result is cached in Script Properties for up to 6 hours
+ * (or until explicitly refreshed) so the dashboard never blocks on the
+ * Gemini API and quota is spent conservatively.
+ * ------------------------------------------------------------------ */
+var WEEKLY_CACHE_KEY = 'AI_WEEKLY_ANOMALIES';
+var WEEKLY_CACHE_TTL_MS = 6 * 3600 * 1000;
+
+function aiWeeklyAnomalies_(payload) {
+  var props = PropertiesService.getScriptProperties();
+  var refresh = !!(payload && payload.refresh);
+  var cached = props.getProperty(WEEKLY_CACHE_KEY);
+  if (!refresh && cached) {
+    try {
+      var obj = JSON.parse(cached);
+      if (obj && obj.ts && (Date.now() - obj.ts) < WEEKLY_CACHE_TTL_MS) return obj;
+    } catch (e) {}
+  }
+  if (!geminiConfigured_()) {
+    return { ts: Date.now(), anomalies: [], skipped: true, reason: 'ai_not_configured' };
+  }
+  var snap = buildWeeklySnapshot_();
+  var out;
+  try {
+    out = geminiCall_({
+      system: 'You are an ops analyst for the Crux Escalation Matrix. Given a 7-day data snapshot, return EXACTLY 3 items as STRICT JSON: {"anomalies":[{"title":"3-6 words","severity":"low|medium|high","detail":"one plain-english sentence citing a specific number or client","suggestion":"one short imperative next step"}]}. Prefer real, cited anomalies over generic advice. If nothing notable happened, return items describing the calm state (severity="low"). No markdown fences, no extra fields.',
+      prompt: 'DATA SNAPSHOT (7 days):\n' + snap,
+      json: true, temp: 0.25, maxTokens: 700
+    });
+  } catch (e) {
+    // Cache the error briefly to avoid hammering the API on a bad key.
+    var errObj = { ts: Date.now(), anomalies: [], error: String(e && e.message || e) };
+    props.setProperty(WEEKLY_CACHE_KEY, JSON.stringify(errObj));
+    return errObj;
+  }
+  var items = (out && out.anomalies) || [];
+  var normalized = items.slice(0, 3).map(function(a) {
+    var sev = String(a.severity || 'medium').toLowerCase();
+    if (['low','medium','high'].indexOf(sev) === -1) sev = 'medium';
+    return {
+      title: String(a.title || '').slice(0, 120),
+      severity: sev,
+      detail: String(a.detail || '').slice(0, 320),
+      suggestion: String(a.suggestion || '').slice(0, 240)
+    };
+  });
+  var result = { ts: Date.now(), anomalies: normalized, generatedAt: Utilities.formatDate(new Date(), getTz_(), 'dd MMM, HH:mm') };
+  props.setProperty(WEEKLY_CACHE_KEY, JSON.stringify(result));
+  return result;
+}
+
+function buildWeeklySnapshot_() {
+  var since = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+  var sinceKey = Utilities.formatDate(since, getTz_(), 'yyyy-MM-dd');
+  var emails = readTable_('EMAIL_LOG').filter(function(r){ return String(r.Timestamp) >= sinceKey; });
+  var esc = readTable_('ESCALATIONS').filter(function(r){ return String(r.CreatedAt) >= sinceKey; });
+  var clients = readTable_('CLIENTS').filter(function(c){ return c.Status !== 'INACTIVE'; });
+  var matrix = readTable_('ESCALATION_MATRIX');
+  var reminders = readTable_('REMINDER_LOG').filter(function(r){ return String(r.ExecutedAt) >= sinceKey; });
+  var clientMap = {}; clients.forEach(function(c){ clientMap[c.ClientID] = c.ClientName; });
+  var incomplete = clients.filter(function(c){
+    var m = matrix.filter(function(x){ return x.ClientID === c.ClientID; });
+    return !isMatrixComplete_(c, m);
+  }).map(function(c){ return c.ClientName; });
+  function byKey(arr, keyFn) {
+    var m = {};
+    arr.forEach(function(x){ var k = keyFn(x) || '—'; m[k] = (m[k]||0) + 1; });
+    return Object.keys(m).sort(function(a,b){ return m[b] - m[a]; }).slice(0, 10).map(function(k){ return k + ' (' + m[k] + ')'; });
+  }
+  var lines = [];
+  lines.push('window_days=7 from=' + sinceKey);
+  lines.push('active_clients=' + clients.length + ' incomplete_matrices=' + incomplete.length);
+  if (incomplete.length) lines.push('incomplete_client_names: ' + incomplete.slice(0, 10).join(', '));
+  lines.push('emails=' + emails.length + ' sent=' + emails.filter(function(r){return r.Status==='SENT';}).length + ' failed=' + emails.filter(function(r){return r.Status==='FAILED';}).length);
+  lines.push('emails_by_type: ' + byKey(emails, function(r){ return r.Type; }).join(', '));
+  lines.push('failed_by_client: ' + byKey(emails.filter(function(r){return r.Status==='FAILED';}), function(r){ return clientMap[r.ClientID] || r.ClientID; }).join(', '));
+  lines.push('failed_reasons_sample: ' + emails.filter(function(r){return r.Status==='FAILED';}).slice(0,6).map(function(r){ return (r.Error||'').slice(0,80); }).join(' | '));
+  lines.push('escalations=' + esc.length + ' open=' + esc.filter(function(r){ return ['OPEN','ASSIGNED','IN_PROGRESS'].indexOf(r.Status) !== -1; }).length + ' high_severity=' + esc.filter(function(r){ return r.Severity === 'High'; }).length);
+  lines.push('escalations_by_client: ' + byKey(esc, function(r){ return clientMap[r.ClientID] || r.ClientID; }).join(', '));
+  lines.push('escalations_by_category: ' + byKey(esc, function(r){ return r.Category; }).join(', '));
+  lines.push('reminder_jobs_this_week: ' + byKey(reminders, function(r){ return r.Type + '/' + r.Result; }).join(', '));
+  return lines.join('\n');
+}
