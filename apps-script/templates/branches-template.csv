@@ -1,0 +1,3 @@
+ClientName,BranchName,BranchCode,Address,CruxPOCName,CruxPOCEmpID,CruxPOCMobile,CruxPOCEmail,BranchManagerName,BranchManagerMobile,BranchManagerEmail,LocationHead,Location,Zone,Status,EffectiveFrom,EffectiveTo,Notes
+ABC Bank,Andheri,ABCB-001,"Andheri West, Mumbai",Rahul Sharma,CRX-101,9876543210,rahul.sharma@crux.example.com,Priya Nair,9812345670,priya.nair@abcb.example.com,rahul.sharma@crux.example.com,Mumbai,West,ACTIVE,2026-01-01,,
+ABC Bank,Borivali,ABCB-002,"Borivali East, Mumbai",Rahul Sharma,CRX-101,9876543210,rahul.sharma@crux.example.com,Amit Deshmukh,9822345671,amit.d@abcb.example.com,rahul.sharma@crux.example.com,Mumbai,West,ACTIVE,2026-01-01,,

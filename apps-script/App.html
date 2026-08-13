@@ -1,0 +1,859 @@
+<script>
+/* ==========================================================
+   Crux Escalation Matrix — SPA
+   Single-file Vanilla JS. Views render into #app.
+   ========================================================== */
+(function() {
+  var BOOT = window.__BOOTSTRAP__ || {};
+  var state = {
+    user: BOOT.user || { email:'', role:'VIEWER', active:false },
+    app: BOOT.app || {},
+    nav: BOOT.nav || [],
+    route: 'dashboard',
+    routeParams: {},
+    cache: {}
+  };
+
+  /* --------------------- RPC wrapper --------------------- */
+  function rpc(action, payload) {
+    return new Promise(function(resolve, reject) {
+      google.script.run
+        .withSuccessHandler(function(res) {
+          if (!res) return reject(new Error('No response'));
+          if (!res.ok) return reject(new Error(res.error || 'Request failed'));
+          resolve(res.data);
+        })
+        .withFailureHandler(function(err) { reject(err); })
+        .rpc(action, payload || {});
+    });
+  }
+
+  /* --------------------- Toast + Modal --------------------- */
+  function toast(msg, kind) {
+    var el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'toast show ' + (kind || 'ok');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function(){ el.className = 'toast'; }, 3000);
+  }
+  var Modal = {
+    open: function(opts) {
+      document.getElementById('modal-title').textContent = opts.title || '';
+      document.getElementById('modal-body').innerHTML = opts.body || '';
+      var foot = document.getElementById('modal-foot'); foot.innerHTML = '';
+      (opts.actions || [{ label:'Close', kind:'secondary', close:true }]).forEach(function(a) {
+        var b = document.createElement('button');
+        b.className = 'btn ' + (a.kind || '');
+        b.textContent = a.label;
+        b.setAttribute('data-testid', a.testid || ('modal-action-' + (a.label||'').toLowerCase().replace(/\s+/g,'-')));
+        b.onclick = function() { if (a.onClick) a.onClick(); if (a.close) Modal.close(); };
+        foot.appendChild(b);
+      });
+      document.getElementById('modal').classList.remove('hidden');
+    },
+    close: function() { document.getElementById('modal').classList.add('hidden'); }
+  };
+  document.addEventListener('click', function(e){
+    if (e.target && e.target.id === 'modal-close') Modal.close();
+    if (e.target && e.target.id === 'modal') Modal.close();
+  });
+
+  /* --------------------- Helpers --------------------- */
+  function h(tag, attrs, children) {
+    var el = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function(k) {
+      if (k === 'class') el.className = attrs[k];
+      else if (k === 'html') el.innerHTML = attrs[k];
+      else if (k.slice(0,2) === 'on') el[k.toLowerCase()] = attrs[k];
+      else if (k === 'testid') el.setAttribute('data-testid', attrs[k]);
+      else el.setAttribute(k, attrs[k]);
+    });
+    (children || []).forEach(function(c) {
+      if (c == null) return;
+      if (typeof c === 'string') el.appendChild(document.createTextNode(c));
+      else el.appendChild(c);
+    });
+    return el;
+  }
+  function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+  function fmtDate(v) { if (!v) return ''; var d = new Date(v); return isNaN(d) ? String(v).slice(0,19).replace('T',' ') : d.toLocaleString(); }
+
+  /* --------------------- Router --------------------- */
+  var Routes = {};
+  function go(route, params) {
+    state.route = route; state.routeParams = params || {};
+    render();
+  }
+  function currentNavKey() { return state.route.split(':')[0]; }
+
+  /* --------------------- Shell --------------------- */
+  function render() {
+    var app = document.getElementById('app');
+    if (!state.user.email) return renderLogin(app);
+    if (!state.user.active) return renderPendingApproval(app);
+    app.innerHTML = '';
+    var shell = h('div', { class: 'app-shell' }, [renderSidebar(), renderMain()]);
+    app.appendChild(shell);
+  }
+
+  function renderSidebar() {
+    var items = state.nav.map(function(n) {
+      var el = h('div', {
+        class: 'nav-item' + (currentNavKey() === n.key ? ' active' : ''),
+        testid: 'nav-' + n.key,
+        onclick: function(){ go(n.key); }
+      }, [h('span',{class:'dot'}, []), n.label]);
+      return el;
+    });
+    return h('div', { class:'sidebar' }, [
+      h('div',{class:'sidebar-brand'},[ 'CRUX', h('small',{},['Escalation Matrix']) ]),
+      h('div',{},items),
+      h('div',{class:'sidebar-user'},[
+        h('div',{}, [h('b',{}, [state.user.name || state.user.email])]),
+        h('div',{class:'muted'},[state.user.email]),
+        h('div',{style:'margin-top:6px'}, [h('span',{class:'role-pill'},[state.user.role])]),
+        state.app.testMode ? h('div',{style:'margin-top:6px'}, [h('span',{class:'badge warn'}, ['TEST MODE'])]) : null
+      ])
+    ]);
+  }
+
+  function renderMain() {
+    var view = Routes[state.route] || Routes[currentNavKey()] || Routes.dashboard;
+    var container = h('div',{class:'main', testid:'view-'+currentNavKey()}, []);
+    view(container);
+    return container;
+  }
+
+  /* --------------------- Login / Pending --------------------- */
+  function renderLogin(app) {
+    app.innerHTML = '';
+    var card = h('div',{class:'login-shell'},[
+      h('div',{class:'brand-tag'},['Crux Risk Management']),
+      h('h1',{},['Client Escalation Matrix']),
+      h('p',{class:'muted'},['Please sign in with your Crux Google Workspace account to continue. Access is restricted to authorised users.']),
+      h('div',{class:'callout'},['This tool is deployed as a domain-restricted Google Apps Script Web App. Sign-in happens through your Google session.'])
+    ]);
+    app.appendChild(card);
+  }
+  function renderPendingApproval(app) {
+    app.innerHTML = '';
+    var form = h('div',{class:'login-shell'},[
+      h('div',{class:'brand-tag'},['Access Request']),
+      h('h1',{},['Awaiting approval']),
+      h('p',{class:'muted'},['Your account is registered but needs admin approval. Please provide a few details to help the admin verify you.']),
+      h('div',{class:'form-row'},[
+        makeField('name','Full name', state.user.name),
+        makeField('mobile','Mobile number','')
+      ]),
+      h('div',{class:'form-row'},[
+        makeField('designation','Designation',''),
+        makeField('manager','Reporting manager email','')
+      ]),
+      h('button',{class:'btn', testid:'submit-access-request', onclick: function(){
+        var payload = { name: val('name'), mobile: val('mobile'), designation: val('designation'), manager: val('manager') };
+        rpc('auth.requestAccess', payload).then(function(){ toast('Request sent to admin','ok'); }).catch(function(e){ toast(e.message,'err'); });
+      }},['Submit request'])
+    ]);
+    app.appendChild(form);
+  }
+  function makeField(id, label, value) {
+    return h('div',{class:'field'},[
+      h('label',{ 'for': id }, [label]),
+      h('input',{ id: id, testid: 'input-'+id, value: value || '' }, [])
+    ]);
+  }
+  function val(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+
+  /* ============ DASHBOARD ============ */
+  Routes.dashboard = function(root) {
+    root.appendChild(h('div',{class:'pageheader'},[
+      h('div',{},[h('h1',{},['Dashboard']), h('div',{class:'sub'},[state.app.company])]),
+      h('div',{},[ h('button',{class:'btn secondary small', onclick: openAutomation, testid:'btn-view-automation'},['View automation']) ])
+    ]));
+    var container = h('div',{},[h('div',{class:'empty'},['Loading…'])]);
+    root.appendChild(container);
+    rpc('dashboard.summary').then(function(d){
+      container.innerHTML = '';
+      var t = d.totals || {};
+      container.appendChild(h('div',{class:'grid grid-3'},[
+        stat('Clients (active)', t.clients, 'across your scope'),
+        stat('Branches', t.branches, ''),
+        stat('Complete matrices', t.complete, 'ready to dispatch'),
+        stat('Incomplete', t.incomplete, 'need attention', t.incomplete > 0 ? 'warn' : 'ok'),
+        stat('Emails this month', t.emailsThisMonth, ''),
+        stat('Open escalations', t.openEscalations, '')
+      ]));
+      if ((d.incompleteList || []).length) {
+        var card = h('div',{class:'card', style:'margin-top:14px'},[]);
+        card.appendChild(h('h3',{},['Matrices requiring attention', h('span',{class:'badge warn'},[String(d.incompleteList.length)])]));
+        var table = h('table',{class:'table', testid:'table-incomplete'},[
+          h('thead',{},[h('tr',{},[h('th',{},['Client']), h('th',{},['Code']), h('th',{},['Owner']), h('th',{},['Updated'])])])
+        ]);
+        var tb = h('tbody',{},[]);
+        d.incompleteList.forEach(function(c){
+          tb.appendChild(h('tr',{onclick: function(){ go('client-detail', { id: c.ClientID }); }, testid:'row-incomplete-'+c.ClientID},[
+            h('td',{},[c.ClientName]), h('td',{},[c.ClientCode || '']),
+            h('td',{},[c.DefaultLocationHead || '']), h('td',{},[fmtDate(c.UpdatedAt)])
+          ]));
+        });
+        table.appendChild(tb); card.appendChild(table); container.appendChild(card);
+      }
+    }).catch(function(e){ container.innerHTML = ''; container.appendChild(h('div',{class:'callout err'},[e.message])); });
+  };
+  function stat(k, v, d, cls) {
+    return h('div',{class:'stat'},[
+      h('div',{class:'k'},[k]),
+      h('div',{class:'v'},[String(v == null ? '—' : v)]),
+      d ? h('div',{class:'d'},[cls ? h('span',{class:'badge '+cls},[d]) : d]) : null
+    ]);
+  }
+  function openAutomation() {
+    rpc('admin.automation.status').then(function(a){
+      Modal.open({
+        title: 'Automation status',
+        body: '<div class="kv"><span class="k">Tick trigger installed</span><span>'+ (a.tickInstalled ? '<span class="badge ok">YES</span>' : '<span class="badge err">NO — run installTriggers()</span>') +'</span></div>'
+          + '<div class="kv"><span class="k">Next 25th reminder</span><span>'+ esc(a.nextReminder25) +'</span></div>'
+          + '<div class="kv"><span class="k">Next last-working-day reminder</span><span>'+ esc(a.nextReminderLWD) +'</span></div>'
+          + '<div class="kv"><span class="k">Next monthly dispatch</span><span>'+ esc(a.nextMonthlyDispatch) +'</span></div>'
+          + '<div class="kv"><span class="k">Last success</span><span>'+ esc(a.lastSuccess) +'</span></div>'
+          + '<div class="kv"><span class="k">Last failure</span><span>'+ esc(a.lastFailure) +'</span></div>'
+      });
+    });
+  }
+
+  /* ============ CLIENTS LIST ============ */
+  Routes.clients = function(root) {
+    root.appendChild(h('div',{class:'pageheader'},[
+      h('div',{},[h('h1',{},[state.user.role === 'LOCATION_HEAD' ? 'My Clients' : 'Clients']), h('div',{class:'sub'},['Manage clients, branches and the 5-level escalation matrix.'])]),
+      h('div',{},[
+        canEdit() ? h('button',{class:'btn', onclick: openClientForm, testid:'btn-new-client'},['+ New client']) : null,
+        canEdit() ? h('button',{class:'btn secondary small', onclick: openBulkImport, testid:'btn-bulk-import', style:'margin-left:8px'},['Bulk import']) : null
+      ])
+    ]));
+    var wrap = h('div',{},[]);
+    root.appendChild(wrap);
+    wrap.appendChild(h('div',{class:'toolbar'},[
+      h('div',{class:'filters'},[ h('input',{ type:'search', placeholder:'Search client…', testid:'search-clients', oninput: function(e){ Routes._clientFilter = e.target.value; loadClients(); } })]),
+      h('div',{class:'muted', id:'clients-count'},['Loading…'])
+    ]));
+    var tableWrap = h('div',{},[]);
+    wrap.appendChild(tableWrap);
+    Routes._clientTableWrap = tableWrap;
+    loadClients();
+  };
+  function loadClients() {
+    var wrap = Routes._clientTableWrap; if (!wrap) return;
+    wrap.innerHTML = '<div class="empty">Loading…</div>';
+    rpc('clients.list', { filters: { ClientName: Routes._clientFilter || '' }, size: 200 }).then(function(res){
+      document.getElementById('clients-count').textContent = res.total + ' client(s)';
+      if (!res.rows.length) {
+        wrap.innerHTML = ''; wrap.appendChild(h('div',{class:'empty'},[h('h3',{},['No clients yet']), h('p',{},['Create your first client to get started.'])])); return;
+      }
+      wrap.innerHTML = '';
+      var table = h('table',{class:'table', testid:'table-clients'},[
+        h('thead',{},[h('tr',{},[h('th',{},['Client']), h('th',{},['Code']), h('th',{},['Branches']), h('th',{},['Matrix']), h('th',{},['Owner']), h('th',{},['Status']), h('th',{},['Updated'])])])
+      ]);
+      var tb = h('tbody',{},[]);
+      res.rows.forEach(function(c){
+        tb.appendChild(h('tr',{onclick: function(){ go('client-detail', { id: c.ClientID }); }, testid: 'row-client-'+c.ClientID},[
+          h('td',{},[h('b',{},[c.ClientName])]),
+          h('td',{},[c.ClientCode || '—']),
+          h('td',{},[String(c._branchCount || 0)]),
+          h('td',{},[c._matrixComplete ? h('span',{class:'badge ok'},['Complete']) : h('span',{class:'badge warn'},['Incomplete'])]),
+          h('td',{},[c.DefaultLocationHead || '—']),
+          h('td',{},[h('span',{class:'badge '+(c.Status==='INACTIVE'?'neutral':'info')},[c.Status || 'ACTIVE'])]),
+          h('td',{},[fmtDate(c.UpdatedAt)])
+        ]));
+      });
+      table.appendChild(tb); wrap.appendChild(table);
+    }).catch(function(e){ wrap.innerHTML = ''; wrap.appendChild(h('div',{class:'callout err'},[e.message])); });
+  }
+  function canEdit() { return ['ADMIN','MANAGER','LOCATION_HEAD'].indexOf(state.user.role) !== -1; }
+  function isAdmin() { return state.user.role === 'ADMIN'; }
+
+  /* ============ CLIENT DETAIL ============ */
+  Routes['client-detail'] = function(root) {
+    var id = state.routeParams.id;
+    root.appendChild(h('div',{class:'pageheader'},[
+      h('div',{},[h('div',{class:'sub'},[h('a',{href:'#', onclick: function(e){ e.preventDefault(); go('clients'); }},['← All clients'])]),
+        h('h1',{id:'client-name'},['Loading…']),
+        h('div',{class:'sub', id:'client-sub'},[''])]),
+      h('div',{id:'client-actions'},[])
+    ]));
+    var body = h('div',{},[]); root.appendChild(body);
+    body.innerHTML = '<div class="empty">Loading…</div>';
+    rpc('clients.get',{id:id}).then(function(d){
+      body.innerHTML = '';
+      var c = d.client;
+      document.getElementById('client-name').textContent = c.ClientName;
+      document.getElementById('client-sub').innerHTML = (c.ClientCode ? '<span class="mono">'+esc(c.ClientCode)+'</span> · ' : '') + esc(c.ClientEmail || 'no client email');
+      var actions = document.getElementById('client-actions');
+      if (canEdit()) {
+        actions.appendChild(h('button',{class:'btn secondary small', testid:'btn-edit-client', onclick: function(){ openClientForm(c); }},['Edit client']));
+      }
+      // Tabs
+      var tabs = ['Overview','Branches','Escalation Matrix'];
+      var current = state.routeParams.tab || 'Overview';
+      var tabBar = h('div',{class:'tabs'}, tabs.map(function(t){
+        return h('div',{class:'tab'+(current===t?' active':''), testid:'tab-'+t.toLowerCase().replace(/\s+/g,'-'), onclick: function(){ state.routeParams.tab = t; render(); }},[t]);
+      }));
+      body.appendChild(tabBar);
+      if (current === 'Overview') renderClientOverview(body, d);
+      else if (current === 'Branches') renderClientBranches(body, d);
+      else renderClientMatrix(body, d);
+    }).catch(function(e){ body.innerHTML = ''; body.appendChild(h('div',{class:'callout err'},[e.message])); });
+  };
+  function renderClientOverview(body, d) {
+    var c = d.client;
+    var card = h('div',{class:'card'},[
+      h('h3',{},['Overview']),
+      kvRow('Client name', c.ClientName), kvRow('Client code', c.ClientCode),
+      kvRow('Primary email', c.ClientEmail), kvRow('CC', c.ClientCC || '—'),
+      kvRow('Default Location Head', c.DefaultLocationHead || '—'),
+      kvRow('Status', c.Status || 'ACTIVE'),
+      kvRow('Effective', (c.EffectiveFrom || '—') + ' → ' + (c.EffectiveTo || 'open')),
+      kvRow('Notes', c.Notes || '—')
+    ]);
+    body.appendChild(card);
+    var v = validateMatrixClient(c, d.matrix);
+    var card2 = h('div',{class:'card'},[
+      h('h3',{},['Matrix status', v.complete ? h('span',{class:'badge ok'},['Complete']) : h('span',{class:'badge warn'},['Incomplete'])]),
+      v.complete ? h('div',{class:'muted'},['This client will receive the dispatch on the 1st.']) :
+        h('div',{},[h('div',{class:'callout'},['Client will NOT be dispatched until the missing fields below are filled.']),
+                    h('ul',{}, v.missing.map(function(m){ return h('li',{},[m]); }))])
+    ]);
+    body.appendChild(card2);
+  }
+  function kvRow(k, v) { return h('div',{class:'kv'},[h('div',{class:'k'},[k]), h('div',{},[String(v||'—')])]); }
+
+  function validateMatrixClient(c, rows) {
+    var missing = []; var EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/; var PHONE = /^[0-9+\-\s()]{7,}$/;
+    if (!c.ClientEmail || !EMAIL.test(c.ClientEmail)) missing.push('Client Email');
+    var lv = { 1:'SPOC',2:'Team Leader',3:'Branch Manager',4:'Zonal Manager',5:'Head Office' };
+    Object.keys(lv).forEach(function(k){
+      var r = rows.filter(function(x){ return String(x.Level) === String(k); })[0] || {};
+      if (!r.ContactName) missing.push(lv[k] + ' — Name');
+      if (!r.Mobile || !PHONE.test(r.Mobile)) missing.push(lv[k] + ' — Mobile');
+      if (!r.Email || !EMAIL.test(r.Email)) missing.push(lv[k] + ' — Email');
+    });
+    return { complete: !missing.length, missing: missing };
+  }
+
+  function renderClientBranches(body, d) {
+    var card = h('div',{class:'card'},[]);
+    card.appendChild(h('h3',{},['Branches ('+d.branches.length+')',
+      canEdit() ? h('button',{class:'btn small', testid:'btn-new-branch', onclick: function(){ openBranchForm({ ClientID: d.client.ClientID }); }},['+ Branch']) : null
+    ]));
+    if (!d.branches.length) { card.appendChild(h('div',{class:'empty'},['No branches yet for this client.'])); }
+    else {
+      var table = h('table',{class:'table', testid:'table-branches'},[
+        h('thead',{},[h('tr',{},[h('th',{},['Code']), h('th',{},['Branch']), h('th',{},['Crux POC']), h('th',{},['Location']), h('th',{},['Zone']), h('th',{},['Status'])])])
+      ]);
+      var tb = h('tbody',{},[]);
+      d.branches.forEach(function(b){
+        tb.appendChild(h('tr',{ onclick: function(){ openBranchForm(b); }, testid:'row-branch-'+b.BranchID },[
+          h('td',{},[h('span',{class:'mono'},[b.BranchCode || ''])]),
+          h('td',{},[h('b',{},[b.BranchName]), h('div',{class:'muted', style:'font-size:12px'},[b.Address || ''])]),
+          h('td',{},[b.CruxPOCName || '—', h('div',{class:'muted', style:'font-size:12px'},[b.CruxPOCEmail || b.CruxPOCMobile || ''])]),
+          h('td',{},[b.Location || '—']), h('td',{},[b.Zone || '—']),
+          h('td',{},[h('span',{class:'badge '+(b.Status==='INACTIVE'?'neutral':'info')},[b.Status || 'ACTIVE'])])
+        ]));
+      });
+      table.appendChild(tb); card.appendChild(table);
+    }
+    body.appendChild(card);
+  }
+  function renderClientMatrix(body, d) {
+    var card = h('div',{class:'card'},[]);
+    card.appendChild(h('h3',{},['5-Level Escalation Matrix', canEdit() ? h('button',{class:'btn small', testid:'btn-save-matrix', onclick: function(){ saveMatrix(d.client.ClientID); }},['Save matrix']) : null]));
+    card.appendChild(h('div',{class:'matrix-grid header'},[h('div',{},['Level']), h('div',{},['Name']), h('div',{},['Mobile']), h('div',{},['Email'])]));
+    var byLevel = {}; d.matrix.forEach(function(m){ byLevel[m.Level] = m; });
+    [1,2,3,4,5].forEach(function(L){
+      var lvName = { 1:'SPOC',2:'Team Leader',3:'Branch Manager',4:'Zonal Manager',5:'Head Office' }[L];
+      var r = byLevel[L] || {};
+      var row = h('div',{class:'matrix-grid'},[
+        h('div',{},[h('div',{class:'lvl'},[String(L)]), h('div',{class:'muted', style:'font-size:12px'},[lvName])]),
+        h('div',{},[h('input',{ id:'mx-name-'+L, testid:'mx-name-'+L, value: r.ContactName || '', placeholder:'Contact name', disabled: !canEdit() ? 'disabled' : null })]),
+        h('div',{},[h('input',{ id:'mx-mobile-'+L, testid:'mx-mobile-'+L, value: r.Mobile || '', placeholder:'Mobile', disabled: !canEdit() ? 'disabled' : null })]),
+        h('div',{},[h('input',{ id:'mx-email-'+L, testid:'mx-email-'+L, value: r.Email || '', placeholder:'Email', type:'email', disabled: !canEdit() ? 'disabled' : null })])
+      ]);
+      card.appendChild(row);
+    });
+    body.appendChild(card);
+  }
+  function saveMatrix(clientId) {
+    var rows = [1,2,3,4,5].map(function(L){
+      var lvName = { 1:'SPOC',2:'Team Leader',3:'Branch Manager',4:'Zonal Manager',5:'Head Office' }[L];
+      return { Level: L, LevelName: lvName, ContactName: val('mx-name-'+L), Mobile: val('mx-mobile-'+L), Email: val('mx-email-'+L) };
+    });
+    rpc('matrix.save', { clientId: clientId, rows: rows }).then(function(){ toast('Matrix saved','ok'); render(); }).catch(function(e){ toast(e.message,'err'); });
+  }
+
+  /* ============ CLIENT FORM ============ */
+  function openClientForm(c) {
+    var edit = !!(c && c.ClientID);
+    Modal.open({
+      title: edit ? 'Edit client' : 'New client',
+      body: '<div class="form-row">'+
+              '<div class="field"><label>Client name*</label><input id="f-name" data-testid="input-client-name" value="'+esc(c && c.ClientName || '')+'"></div>'+
+              '<div class="field"><label>Client code</label><input id="f-code" data-testid="input-client-code" value="'+esc(c && c.ClientCode || '')+'"></div>'+
+            '</div>'+
+            '<div class="form-row">'+
+              '<div class="field"><label>Client email*</label><input id="f-email" data-testid="input-client-email" value="'+esc(c && c.ClientEmail || '')+'"></div>'+
+              '<div class="field"><label>Client CC (comma-separated)</label><input id="f-cc" data-testid="input-client-cc" value="'+esc(c && c.ClientCC || '')+'"></div>'+
+            '</div>'+
+            '<div class="form-row">'+
+              '<div class="field"><label>Default Location Head (email)</label><input id="f-lh" data-testid="input-client-lh" value="'+esc(c && c.DefaultLocationHead || state.user.email)+'"></div>'+
+              '<div class="field"><label>Status</label><select id="f-status" data-testid="select-client-status"><option value="ACTIVE">ACTIVE</option><option value="INACTIVE"'+((c && c.Status)==='INACTIVE'?' selected':'')+'>INACTIVE</option></select></div>'+
+            '</div>'+
+            '<div class="field"><label>Notes</label><textarea id="f-notes" data-testid="input-client-notes">'+esc(c && c.Notes || '')+'</textarea></div>',
+      actions: [
+        { label:'Cancel', kind:'secondary', close:true },
+        { label: edit ? 'Save changes' : 'Create client', kind:'', testid:'submit-client', onClick: function() {
+          var payload = {
+            ClientID: c && c.ClientID,
+            ClientName: val('f-name'), ClientCode: val('f-code'),
+            ClientEmail: val('f-email'), ClientCC: val('f-cc'),
+            DefaultLocationHead: val('f-lh'), Status: val('f-status'), Notes: val('f-notes')
+          };
+          rpc('clients.upsert', payload).then(function(){ Modal.close(); toast('Saved','ok'); loadClients(); if (state.route === 'client-detail') render(); }).catch(function(e){ toast(e.message,'err'); });
+        }}
+      ]
+    });
+  }
+
+  /* ============ BRANCH FORM ============ */
+  function openBranchForm(b) {
+    var edit = !!(b && b.BranchID);
+    Modal.open({
+      title: edit ? 'Edit branch' : 'New branch',
+      body:
+        '<div class="form-row">'+
+          '<div class="field"><label>Branch name*</label><input id="b-name" data-testid="input-branch-name" value="'+esc(b && b.BranchName || '')+'"></div>'+
+          '<div class="field"><label>Branch code*</label><input id="b-code" data-testid="input-branch-code" value="'+esc(b && b.BranchCode || '')+'"></div>'+
+        '</div>'+
+        '<div class="field"><label>Address</label><input id="b-addr" data-testid="input-branch-address" value="'+esc(b && b.Address || '')+'"></div>'+
+        '<div class="form-row-3">'+
+          '<div class="field"><label>Crux POC name</label><input id="b-pn" data-testid="input-crux-poc-name" value="'+esc(b && b.CruxPOCName || '')+'"></div>'+
+          '<div class="field"><label>Crux POC mobile</label><input id="b-pm" data-testid="input-crux-poc-mobile" value="'+esc(b && b.CruxPOCMobile || '')+'"></div>'+
+          '<div class="field"><label>Crux POC email</label><input id="b-pe" data-testid="input-crux-poc-email" value="'+esc(b && b.CruxPOCEmail || '')+'"></div>'+
+        '</div>'+
+        '<div class="form-row-3">'+
+          '<div class="field"><label>Branch manager</label><input id="b-bm" data-testid="input-bm-name" value="'+esc(b && b.BranchManagerName || '')+'"></div>'+
+          '<div class="field"><label>Manager mobile</label><input id="b-bmm" data-testid="input-bm-mobile" value="'+esc(b && b.BranchManagerMobile || '')+'"></div>'+
+          '<div class="field"><label>Manager email</label><input id="b-bme" data-testid="input-bm-email" value="'+esc(b && b.BranchManagerEmail || '')+'"></div>'+
+        '</div>'+
+        '<div class="form-row-3">'+
+          '<div class="field"><label>Location Head (email)</label><input id="b-lh" data-testid="input-branch-lh" value="'+esc(b && b.LocationHead || '')+'"></div>'+
+          '<div class="field"><label>Location</label><input id="b-loc" value="'+esc(b && b.Location || '')+'"></div>'+
+          '<div class="field"><label>Zone</label><input id="b-zone" value="'+esc(b && b.Zone || '')+'"></div>'+
+        '</div>',
+      actions: [
+        { label:'Cancel', kind:'secondary', close:true },
+        { label: edit ? 'Save changes' : 'Add branch', testid:'submit-branch', onClick: function() {
+          var payload = {
+            BranchID: b && b.BranchID, ClientID: b.ClientID,
+            BranchName: val('b-name'), BranchCode: val('b-code'), Address: val('b-addr'),
+            CruxPOCName: val('b-pn'), CruxPOCMobile: val('b-pm'), CruxPOCEmail: val('b-pe'),
+            BranchManagerName: val('b-bm'), BranchManagerMobile: val('b-bmm'), BranchManagerEmail: val('b-bme'),
+            LocationHead: val('b-lh'), Location: val('b-loc'), Zone: val('b-zone')
+          };
+          rpc('branches.upsert', payload).then(function(){ Modal.close(); toast('Branch saved','ok'); render(); }).catch(function(e){ toast(e.message,'err'); });
+        }}
+      ]
+    });
+  }
+
+  /* ============ BULK IMPORT ============ */
+  function openBulkImport() {
+    Modal.open({
+      title: 'Bulk import',
+      body:
+        '<div class="field"><label>Kind</label><select id="imp-kind" data-testid="select-import-kind">'+
+          '<option value="CLIENTS">Clients</option>'+
+          '<option value="BRANCHES">Branches</option>'+
+          '<option value="MATRIX">Escalation Matrix</option>'+
+        '</select></div>'+
+        '<div class="callout" id="imp-help">Paste tab- or comma-separated data below (first row = column headers). <a href="#" id="imp-tpl">Download template</a></div>'+
+        '<div class="field"><label>Rows</label><textarea id="imp-rows" data-testid="input-import-rows" placeholder="ClientName,ClientCode,ClientEmail,..." style="min-height:180px;font-family:var(--font-mono);font-size:12px"></textarea></div>'+
+        '<div id="imp-preview"></div>',
+      actions: [
+        { label:'Cancel', kind:'secondary', close:true },
+        { label:'Validate', kind:'secondary', testid:'btn-validate-import', onClick: function() {
+          var kind = val('imp-kind'); var raw = val('imp-rows');
+          var rows = parseTable(raw);
+          rpc('import.validate', { kind: kind, rows: rows }).then(function(res){
+            renderImportPreview(res, kind);
+          }).catch(function(e){ toast(e.message,'err'); });
+        }},
+        { label:'Commit valid rows', testid:'btn-commit-import', onClick: function() {
+          if (!Routes._importResult) { toast('Validate first','err'); return; }
+          rpc('import.commit', { kind: val('imp-kind'), items: Routes._importResult.items }).then(function(r){
+            toast('Imported '+r.ok+' rows, '+r.fail+' failed','ok'); Modal.close(); loadClients();
+          }).catch(function(e){ toast(e.message,'err'); });
+        }}
+      ]
+    });
+    document.getElementById('imp-tpl').addEventListener('click', function(e){
+      e.preventDefault();
+      var kind = val('imp-kind');
+      var tpl = {
+        CLIENTS: 'ClientName,ClientCode,ClientEmail,ClientCC,DefaultLocationHead,Status\nABC Bank,ABCB,ops@abc.example,cc@abc.example,rahul@crux.example,ACTIVE',
+        BRANCHES: 'ClientName,BranchName,BranchCode,Address,CruxPOCName,CruxPOCMobile,CruxPOCEmail,BranchManagerName,BranchManagerMobile,BranchManagerEmail,LocationHead,Location,Zone\nABC Bank,Andheri,ABCB-001,"Andheri, Mumbai",Rahul Sharma,9876543210,rahul@crux.example,Priya Nair,9812345670,priya@abcb.example,rahul@crux.example,Mumbai,West',
+        MATRIX: 'ClientName,Level,ContactName,Mobile,Email\nABC Bank,1,SPOC ABC,9800000001,spoc@abcb.example\nABC Bank,2,TL ABC,9800000002,tl@abcb.example\nABC Bank,3,BM ABC,9800000003,bm@abcb.example\nABC Bank,4,ZM ABC,9800000004,zm@abcb.example\nABC Bank,5,HO ABC,9800000005,ho@abcb.example'
+      };
+      document.getElementById('imp-rows').value = tpl[kind] || '';
+    });
+  }
+  function parseTable(raw) {
+    var lines = String(raw||'').replace(/\r/g,'').split('\n').filter(function(l){ return l.trim(); });
+    if (!lines.length) return [];
+    var sep = lines[0].indexOf('\t') !== -1 ? '\t' : ',';
+    var headers = splitCsv(lines[0], sep);
+    return lines.slice(1).map(function(line){
+      var cells = splitCsv(line, sep);
+      var obj = {}; headers.forEach(function(h, i){ obj[h.trim()] = (cells[i] || '').trim(); });
+      return obj;
+    });
+  }
+  function splitCsv(line, sep) {
+    var out = []; var cur = ''; var inQ = false;
+    for (var i = 0; i < line.length; i++) {
+      var ch = line[i];
+      if (ch === '"' && line[i+1] === '"') { cur += '"'; i++; }
+      else if (ch === '"') inQ = !inQ;
+      else if (ch === sep && !inQ) { out.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    out.push(cur); return out;
+  }
+  function renderImportPreview(res, kind) {
+    Routes._importResult = res;
+    var host = document.getElementById('imp-preview');
+    host.innerHTML =
+      '<div class="callout ok">Total: '+res.total+' · Valid: '+res.valid+' · Invalid: '+res.invalid+' · Creates: '+res.creates+' · Updates: '+res.updates+' · Duplicates in file: '+res.duplicatesInFile+'</div>' +
+      '<div style="max-height:220px;overflow:auto;margin-top:10px"><table class="table"><thead><tr><th>#</th><th>Status</th><th>Key</th><th>Errors</th></tr></thead><tbody>'+
+      res.items.map(function(it){
+        var key = kind === 'CLIENTS' ? it.row.ClientName : (kind === 'BRANCHES' ? (it.row.ClientName+' / '+it.row.BranchCode) : (it.row.ClientName+' / L'+it.row.Level));
+        var cls = it.status === 'INVALID' || it.status === 'DUPLICATE_IN_FILE' ? 'err' : (it.status === 'UPDATE' ? 'info' : 'ok');
+        return '<tr class="no-hover"><td>'+(it.index+1)+'</td><td><span class="badge '+cls+'">'+it.status+'</span></td><td>'+esc(key)+'</td><td>'+esc((it.errors||[]).join('; '))+'</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  /* ============ ESCALATIONS ============ */
+  Routes.escalations = function(root) {
+    root.appendChild(h('div',{class:'pageheader'},[
+      h('div',{},[h('h1',{},['Escalations']), h('div',{class:'sub'},['Log incoming issues from bankers/clients and raise formal escalations from Crux.'])]),
+      h('div',{},[
+        canEdit() ? h('button',{class:'btn secondary small', onclick: openLogEscalation, testid:'btn-log-escalation'},['+ Log escalation']) : null,
+        canEdit() ? h('button',{class:'btn small', onclick: openRaiseEscalation, testid:'btn-raise-escalation', style:'margin-left:8px'},['+ Raise escalation']) : null
+      ])
+    ]));
+    var wrap = h('div',{},[]); root.appendChild(wrap);
+    wrap.innerHTML = '<div class="empty">Loading…</div>';
+    rpc('escalations.list',{}).then(function(res){
+      wrap.innerHTML = '';
+      if (!res.rows.length) { wrap.appendChild(h('div',{class:'empty'},[h('h3',{},['No escalations yet']), h('p',{},['Log a call or raise one to see it here.'])])); return; }
+      var t = h('table',{class:'table', testid:'table-escalations'},[
+        h('thead',{},[h('tr',{},[h('th',{},['ID']), h('th',{},['Type']), h('th',{},['Client']), h('th',{},['Branch']), h('th',{},['Category']), h('th',{},['Severity']), h('th',{},['Owner']), h('th',{},['Status']), h('th',{},['Due'])])])
+      ]);
+      var tb = h('tbody',{},[]);
+      res.rows.forEach(function(e){
+        tb.appendChild(h('tr',{ onclick: function(){ openEscalationDetail(e); }, testid:'row-esc-'+e.EscalationID },[
+          h('td',{},[h('span',{class:'mono'},[e.EscalationID])]),
+          h('td',{},[h('span',{class:'badge '+(e.Type==='RAISED'?'warn':'info')},[e.Type])]),
+          h('td',{},[e.ClientName || e.ClientID]), h('td',{},[e.BranchCode || '—']),
+          h('td',{},[e.Category]), h('td',{},[h('span',{class:'badge '+(e.Severity==='High'?'err':'neutral')},[e.Severity])]),
+          h('td',{},[e.AssignedOwner || '—']), h('td',{},[h('span',{class:'badge '+(e.Status==='CLOSED'?'ok':(e.Status==='OPEN'?'warn':'info'))},[e.Status])]),
+          h('td',{},[e.TargetDate || '—'])
+        ]));
+      });
+      t.appendChild(tb); wrap.appendChild(t);
+    });
+  };
+
+  function clientPicker(id, currentValue) {
+    // build a select from clients cache
+    return rpc('clients.list', { size: 500 }).then(function(res){
+      var opts = res.rows.map(function(c){ return '<option value="'+c.ClientID+'"'+(currentValue===c.ClientID?' selected':'')+'>'+esc(c.ClientName)+'</option>'; }).join('');
+      return '<select id="'+id+'" data-testid="'+id+'"><option value="">— Select client —</option>'+opts+'</select>';
+    });
+  }
+  function openLogEscalation() {
+    clientPicker('e-client').then(function(sel){
+      Modal.open({
+        title: 'Log an escalation (from banker/client)',
+        body:
+          '<div class="form-row"><div class="field"><label>Client*</label>'+sel+'</div>'+
+          '<div class="field"><label>Branch code</label><input id="e-brcode" data-testid="input-esc-branch-code"></div></div>'+
+          '<div class="form-row-3">'+
+            '<div class="field"><label>Banker/Client name</label><input id="e-name" data-testid="input-esc-caller-name"></div>'+
+            '<div class="field"><label>Banker/Client phone</label><input id="e-phone" data-testid="input-esc-caller-phone"></div>'+
+            '<div class="field"><label>Category</label><select id="e-cat" data-testid="select-esc-category"><option>Service</option><option>Compliance</option><option>Ops</option><option>Billing</option><option>Other</option></select></div>'+
+          '</div>'+
+          '<div class="form-row-3">'+
+            '<div class="field"><label>Severity</label><select id="e-sev" data-testid="select-esc-severity"><option>Low</option><option selected>Medium</option><option>High</option></select></div>'+
+            '<div class="field"><label>Escalated against</label><input id="e-against" data-testid="input-esc-against"></div>'+
+            '<div class="field"><label>Target date</label><input id="e-tgt" type="date"></div>'+
+          '</div>'+
+          '<div class="field"><label>Description</label><textarea id="e-desc" data-testid="input-esc-description"></textarea></div>'+
+          '<div class="field"><label>Required action</label><textarea id="e-action" data-testid="input-esc-action"></textarea></div>',
+        actions: [
+          { label:'Cancel', kind:'secondary', close:true },
+          { label:'Log escalation', testid:'submit-log-escalation', onClick: function() {
+            var payload = {
+              ClientID: val('e-client'), BranchCode: val('e-brcode'),
+              ContactName: val('e-name'), ContactPhone: val('e-phone'),
+              Category: val('e-cat'), Severity: val('e-sev'),
+              EscalatedAgainst: val('e-against'), TargetDate: val('e-tgt'),
+              Description: val('e-desc'), RequiredAction: val('e-action')
+            };
+            rpc('escalations.log', payload).then(function(){ Modal.close(); toast('Escalation logged','ok'); go('escalations'); }).catch(function(e){ toast(e.message,'err'); });
+          }}
+        ]
+      });
+    });
+  }
+  function openRaiseEscalation() {
+    clientPicker('r-client').then(function(sel){
+      Modal.open({
+        title: 'Raise a formal escalation',
+        body:
+          '<div class="form-row"><div class="field"><label>Client*</label>'+sel+'</div>'+
+          '<div class="field"><label>Branch code</label><input id="r-brcode"></div></div>'+
+          '<div class="form-row-3">'+
+            '<div class="field"><label>Category</label><select id="r-cat"><option>Service</option><option>Compliance</option><option>Ops</option><option>Billing</option><option>Other</option></select></div>'+
+            '<div class="field"><label>Severity</label><select id="r-sev"><option>Low</option><option selected>Medium</option><option>High</option></select></div>'+
+            '<div class="field"><label>Due date</label><input id="r-due" type="date"></div>'+
+          '</div>'+
+          '<div class="field"><label>Person/team concerned</label><input id="r-person" data-testid="input-raise-person"></div>'+
+          '<div class="field"><label>Details</label><textarea id="r-details" data-testid="input-raise-details"></textarea></div>'+
+          '<div class="field"><label>Required resolution</label><textarea id="r-resolution" data-testid="input-raise-resolution"></textarea></div>'+
+          '<div class="form-row"><div class="field"><label>To (comma-separated)*</label><input id="r-to" data-testid="input-raise-to"></div>'+
+          '<div class="field"><label>CC (comma-separated)</label><input id="r-cc" data-testid="input-raise-cc"></div></div>',
+        actions: [
+          { label:'Cancel', kind:'secondary', close:true },
+          { label:'Send escalation', testid:'submit-raise-escalation', onClick: function() {
+            var payload = {
+              ClientID: val('r-client'), BranchCode: val('r-brcode'),
+              Category: val('r-cat'), Severity: val('r-sev'), DueDate: val('r-due'),
+              PersonConcerned: val('r-person'), Details: val('r-details'),
+              RequiredResolution: val('r-resolution'), To: val('r-to'), Cc: val('r-cc')
+            };
+            rpc('escalations.raise', payload).then(function(res){
+              Modal.close();
+              toast(res.email && res.email.status === 'SENT' ? 'Escalation sent' : 'Escalation created (email: '+(res.email && res.email.status)+')', res.email && res.email.status === 'SENT' ? 'ok' : 'err');
+              go('escalations');
+            }).catch(function(e){ toast(e.message,'err'); });
+          }}
+        ]
+      });
+    });
+  }
+  function openEscalationDetail(e) {
+    var body = '<div class="kv"><span class="k">ID</span><span class="mono">'+esc(e.EscalationID)+'</span></div>'+
+      '<div class="kv"><span class="k">Type</span><span>'+e.Type+'</span></div>'+
+      '<div class="kv"><span class="k">Client</span><span>'+esc(e.ClientID)+'</span></div>'+
+      '<div class="kv"><span class="k">Description</span><span>'+esc(e.Description)+'</span></div>'+
+      '<div class="kv"><span class="k">Required action</span><span>'+esc(e.RequiredAction)+'</span></div>'+
+      '<div class="field"><label>Status</label><select id="es-status" data-testid="select-esc-detail-status">'+
+        ['OPEN','ASSIGNED','IN_PROGRESS','RESOLVED','CLOSED'].map(function(s){ return '<option value="'+s+'"'+(e.Status===s?' selected':'')+'>'+s+'</option>'; }).join('')+
+      '</select></div>'+
+      '<div class="field"><label>Closure remarks</label><textarea id="es-remarks" data-testid="input-esc-closure-remarks">'+esc(e.ClosureRemarks || '')+'</textarea></div>';
+    Modal.open({
+      title: 'Escalation ' + e.EscalationID,
+      body: body,
+      actions: [{ label:'Close', kind:'secondary', close:true }, { label:'Update', testid:'btn-update-escalation', onClick: function() {
+        rpc('escalations.update', { EscalationID: e.EscalationID, Status: val('es-status'), ClosureRemarks: val('es-remarks'), ClosureDate: (val('es-status') === 'CLOSED' ? new Date().toISOString().slice(0,10) : '') })
+          .then(function(){ Modal.close(); toast('Updated','ok'); go('escalations'); }).catch(function(e){ toast(e.message,'err'); });
+      }}]
+    });
+  }
+
+  /* ============ ADMIN ============ */
+  Routes.admin = function(root) {
+    if (!isAdmin()) { root.appendChild(h('div',{class:'callout err'},['Admin only.'])); return; }
+    root.appendChild(h('div',{class:'pageheader'},[h('div',{},[h('h1',{},['Admin']), h('div',{class:'sub'},['Configuration, users, holidays, templates and controls.'])])]));
+    var tabs = ['Users','Settings','Templates','Holidays','Automation','Setup'];
+    var current = state.routeParams.tab || 'Users';
+    root.appendChild(h('div',{class:'tabs'}, tabs.map(function(t){ return h('div',{class:'tab'+(current===t?' active':''), testid:'tab-admin-'+t.toLowerCase(), onclick: function(){ state.routeParams.tab = t; render(); }},[t]); })));
+    var body = h('div',{},[]); root.appendChild(body);
+    if (current === 'Users') renderAdminUsers(body);
+    else if (current === 'Settings') renderAdminSettings(body);
+    else if (current === 'Templates') renderAdminTemplates(body);
+    else if (current === 'Holidays') renderAdminHolidays(body);
+    else if (current === 'Automation') renderAdminAutomation(body);
+    else renderAdminSetup(body);
+  };
+  function renderAdminUsers(body) {
+    body.innerHTML = '<div class="empty">Loading…</div>';
+    rpc('admin.users.list').then(function(rows){
+      body.innerHTML = '';
+      var card = h('div',{class:'card'},[]);
+      card.appendChild(h('h3',{},['Users', h('button',{class:'btn small', testid:'btn-new-user', onclick: function(){ openUserForm({}); }},['+ New user'])]));
+      var t = h('table',{class:'table'},[h('thead',{},[h('tr',{},[h('th',{},['Name']), h('th',{},['Email']), h('th',{},['Role']), h('th',{},['Location head']), h('th',{},['Status'])])])]);
+      var tb = h('tbody',{},[]);
+      rows.forEach(function(u){ tb.appendChild(h('tr',{ onclick: function(){ openUserForm(u); }, testid:'row-user-'+u.UserID },[
+        h('td',{},[u.Name]), h('td',{},[u.Email]), h('td',{},[h('span',{class:'badge info'},[u.Role])]),
+        h('td',{},[u.LocationHead || '—']), h('td',{},[h('span',{class:'badge '+(u.Status==='ACTIVE'?'ok':(u.Status==='PENDING'?'warn':'neutral'))},[u.Status])])
+      ])); });
+      t.appendChild(tb); card.appendChild(t); body.appendChild(card);
+    });
+  }
+  function openUserForm(u) {
+    Modal.open({
+      title: u.UserID ? 'Edit user' : 'New user',
+      body:
+        '<div class="form-row"><div class="field"><label>Name*</label><input id="u-name" data-testid="input-user-name" value="'+esc(u.Name||'')+'"></div>'+
+        '<div class="field"><label>Email*</label><input id="u-email" data-testid="input-user-email" value="'+esc(u.Email||'')+'"'+(u.UserID?' readonly':'')+'></div></div>'+
+        '<div class="form-row-3">'+
+          '<div class="field"><label>Role</label><select id="u-role" data-testid="select-user-role">'+['ADMIN','MANAGER','LOCATION_HEAD','VIEWER'].map(function(r){return '<option'+(u.Role===r?' selected':'')+'>'+r+'</option>';}).join('')+'</select></div>'+
+          '<div class="field"><label>Location head code</label><input id="u-lh" value="'+esc(u.LocationHead||'')+'"></div>'+
+          '<div class="field"><label>Status</label><select id="u-status" data-testid="select-user-status">'+['ACTIVE','PENDING','INACTIVE'].map(function(s){return '<option'+(u.Status===s?' selected':'')+'>'+s+'</option>';}).join('')+'</select></div>'+
+        '</div>',
+      actions: [
+        { label:'Cancel', kind:'secondary', close:true },
+        { label:'Save', testid:'submit-user', onClick: function(){
+          rpc('admin.users.upsert', { UserID: u.UserID, Name: val('u-name'), Email: val('u-email'), Role: val('u-role'), LocationHead: val('u-lh'), Status: val('u-status') })
+            .then(function(){ Modal.close(); toast('User saved','ok'); render(); }).catch(function(e){ toast(e.message,'err'); });
+        }}
+      ]
+    });
+  }
+  function renderAdminSettings(body) {
+    body.innerHTML = '<div class="empty">Loading…</div>';
+    rpc('admin.settings.get').then(function(rows){
+      body.innerHTML = '';
+      var card = h('div',{class:'card'},[h('h3',{},['Application settings'])]);
+      var updates = {};
+      rows.forEach(function(r){
+        var id = 's-' + r.Key;
+        card.appendChild(h('div',{class:'field'},[
+          h('label',{},[r.Key, h('span',{class:'muted', style:'margin-left:8px;text-transform:none;letter-spacing:0'},['— '+ (r.Description||'')])]),
+          h('input',{ id: id, testid:'setting-'+r.Key, value: r.Value || '', oninput: function(e){ updates[r.Key] = e.target.value; } })
+        ]));
+      });
+      card.appendChild(h('div',{class:'btn-row'},[
+        h('button',{class:'btn', testid:'btn-save-settings', onclick: function(){
+          var arr = Object.keys(updates).map(function(k){ return { Key:k, Value: updates[k] }; });
+          rpc('admin.settings.save', { updates: arr }).then(function(){ toast('Settings saved','ok'); }).catch(function(e){ toast(e.message,'err'); });
+        }},['Save settings']),
+        h('button',{class:'btn secondary', testid:'btn-test-email', onclick: function(){
+          Modal.open({ title:'Send test email', body:'<div class="field"><label>To</label><input id="te-to" value="'+esc(state.user.email)+'" data-testid="input-test-email-to"></div>',
+            actions:[{label:'Cancel',kind:'secondary',close:true},{label:'Send test', testid:'submit-test-email', onClick: function(){ rpc('admin.email.test',{ to: val('te-to') }).then(function(r){ Modal.close(); toast('Test email: '+r.status + (r.error?' — '+r.error:''), r.status==='SENT' ? 'ok' : 'err'); }).catch(function(e){ toast(e.message,'err'); }); }}]});
+        }},['Send test email'])
+      ]));
+      body.appendChild(card);
+    });
+  }
+  function renderAdminTemplates(body) {
+    body.innerHTML = '<div class="empty">Loading…</div>';
+    rpc('admin.templates.get').then(function(rows){
+      body.innerHTML = '';
+      var edited = {};
+      rows.forEach(function(r){
+        edited[r.Key] = { Key: r.Key, Subject: r.Subject, Body: r.Body };
+        body.appendChild(h('div',{class:'card'},[
+          h('h3',{},[r.Key + ' — email template']),
+          h('div',{class:'field'},[h('label',{},['Subject']), h('input',{ id:'ts-'+r.Key, testid:'tpl-subject-'+r.Key, value:r.Subject||'', oninput: function(e){ edited[r.Key].Subject = e.target.value; }})]),
+          h('div',{class:'field'},[h('label',{},['Body (HTML). Placeholders: {{VAR_NAME}}']), h('textarea',{ id:'tb-'+r.Key, testid:'tpl-body-'+r.Key, style:'min-height:140px;font-family:var(--font-mono);font-size:12px', oninput: function(e){ edited[r.Key].Body = e.target.value; } }, [r.Body || ''])])
+        ]));
+      });
+      body.appendChild(h('div',{class:'btn-row'},[
+        h('button',{class:'btn', testid:'btn-save-templates', onclick: function(){
+          rpc('admin.templates.save', { items: Object.keys(edited).map(function(k){ return edited[k]; }) }).then(function(){ toast('Templates saved','ok'); }).catch(function(e){ toast(e.message,'err'); });
+        }},['Save templates'])
+      ]));
+    });
+  }
+  function renderAdminHolidays(body) {
+    body.innerHTML = '<div class="empty">Loading…</div>';
+    rpc('admin.holidays.list').then(function(rows){
+      body.innerHTML = '';
+      var list = rows.slice();
+      var card = h('div',{class:'card'},[]);
+      card.appendChild(h('h3',{},['Company holidays', h('button',{class:'btn small', testid:'btn-add-holiday', onclick: function(){ list.push({ HolidayID:'', Date:'', Name:'', Status:'ACTIVE' }); redraw(); }},['+ Holiday'])]));
+      var container = h('div',{},[]); card.appendChild(container);
+      function redraw() {
+        container.innerHTML = '';
+        list.forEach(function(h_, idx){
+          container.appendChild(h('div',{class:'form-row-3', style:'margin-bottom:8px'},[
+            h('div',{class:'field'},[h('label',{},['Date']), h('input',{ type:'date', value: h_.Date || '', oninput: function(e){ list[idx].Date = e.target.value; }})]),
+            h('div',{class:'field'},[h('label',{},['Name']), h('input',{ value: h_.Name || '', oninput: function(e){ list[idx].Name = e.target.value; }})]),
+            h('div',{class:'field'},[h('label',{},['Status']), h('select',{ onchange: function(e){ list[idx].Status = e.target.value; }},[
+              h('option',{ value:'ACTIVE', selected: h_.Status !== 'INACTIVE' ? 'selected' : null},['ACTIVE']),
+              h('option',{ value:'INACTIVE', selected: h_.Status === 'INACTIVE' ? 'selected' : null },['INACTIVE'])
+            ])])
+          ]));
+        });
+      }
+      redraw();
+      card.appendChild(h('button',{class:'btn', testid:'btn-save-holidays', onclick: function(){ rpc('admin.holidays.save', { items: list }).then(function(){ toast('Holidays saved','ok'); render(); }).catch(function(e){ toast(e.message,'err'); }); }},['Save holidays']));
+      body.appendChild(card);
+    });
+  }
+  function renderAdminAutomation(body) {
+    body.innerHTML = '<div class="empty">Loading…</div>';
+    rpc('admin.automation.status').then(function(a){
+      body.innerHTML = '';
+      body.appendChild(h('div',{class:'card'},[
+        h('h3',{},['Automation']),
+        kvRow('Tick trigger installed', a.tickInstalled ? 'YES' : 'NO'),
+        kvRow('Next 25th reminder', a.nextReminder25),
+        kvRow('Next last-working-day reminder', a.nextReminderLWD),
+        kvRow('Next monthly dispatch', a.nextMonthlyDispatch),
+        kvRow('Last success', a.lastSuccess || '—'),
+        kvRow('Last failure', a.lastFailure || '—'),
+        h('div',{class:'btn-row'},[
+          h('button',{class:'btn secondary', testid:'btn-run-25', onclick: function(){ rpc('admin.run.reminder25',{ force:true }).then(function(r){ toast('25th reminder run: sent='+r.sent+' failed='+r.failed,'ok'); }).catch(function(e){ toast(e.message,'err'); }); }},['Run 25th reminder']),
+          h('button',{class:'btn secondary', testid:'btn-run-lwd', onclick: function(){ rpc('admin.run.reminderLWD',{ force:true }).then(function(r){ toast('LWD reminder run: sent='+r.sent+' failed='+r.failed,'ok'); }).catch(function(e){ toast(e.message,'err'); }); }},['Run LWD reminder']),
+          h('button',{class:'btn warn', testid:'btn-run-dispatch', onclick: function(){ rpc('admin.run.dispatch',{ force:true }).then(function(r){ toast('Dispatch: ok='+r.ok+' incomplete='+r.incomplete+' failed='+r.failed,'ok'); }).catch(function(e){ toast(e.message,'err'); }); }},['Run monthly dispatch'])
+        ])
+      ]));
+    });
+  }
+  function renderAdminSetup(body) {
+    body.innerHTML = '';
+    body.appendChild(h('div',{class:'card'},[
+      h('h3',{},['One-time setup']),
+      h('p',{class:'muted'},['Install the tick trigger, then optionally seed demo data.']),
+      h('div',{class:'btn-row'},[
+        h('button',{class:'btn', testid:'btn-install-triggers', onclick: function(){ rpc('admin.setup.triggers').then(function(){ toast('Trigger installed','ok'); render(); }).catch(function(e){ toast(e.message,'err'); }); }},['Install tick trigger']),
+        h('button',{class:'btn secondary', testid:'btn-seed-demo', onclick: function(){ rpc('admin.setup.seed').then(function(r){ toast(r.seeded ? 'Seeded '+r.clients+' clients' : 'Already has data','ok'); }).catch(function(e){ toast(e.message,'err'); }); }},['Seed demo data'])
+      ])
+    ]));
+  }
+
+  /* ============ LOGS ============ */
+  Routes.logs = function(root) {
+    root.appendChild(h('div',{class:'pageheader'},[h('div',{},[h('h1',{},['Logs']), h('div',{class:'sub'},['Email, audit and reminder trails.'])])]));
+    var tabs = ['Email','Audit','Reminders'];
+    var current = state.routeParams.tab || 'Email';
+    root.appendChild(h('div',{class:'tabs'}, tabs.map(function(t){ return h('div',{class:'tab'+(current===t?' active':''), testid:'tab-log-'+t.toLowerCase(), onclick: function(){ state.routeParams.tab = t; render(); }},[t]); })));
+    var body = h('div',{},[]); root.appendChild(body);
+    if (current === 'Email') loadLog(body, 'admin.logs.email', ['Timestamp','Type','ClientID','ToAddr','Subject','Status','Error']);
+    else if (current === 'Audit') loadLog(body, 'admin.logs.audit', ['Timestamp','User','Action','Entity','EntityID']);
+    else loadLog(body, 'admin.logs.reminders', ['JobKey','Type','ExecutedAt','ExecutedBy','Result','Notes']);
+  };
+  function loadLog(body, action, cols) {
+    body.innerHTML = '<div class="empty">Loading…</div>';
+    rpc(action, {}).then(function(res){
+      body.innerHTML = '';
+      var t = h('table',{class:'table'},[h('thead',{},[h('tr',{}, cols.map(function(c){ return h('th',{},[c]); }))])]);
+      var tb = h('tbody',{},[]);
+      res.rows.forEach(function(r){
+        tb.appendChild(h('tr',{class:'no-hover'}, cols.map(function(c){
+          if (c === 'Status') return h('td',{},[h('span',{class:'badge '+(r[c]==='SENT'?'ok':(r[c]==='FAILED'?'err':'info'))},[String(r[c]||'')])]);
+          return h('td',{},[String(r[c] == null ? '' : r[c]).slice(0, 200)]);
+        })));
+      });
+      t.appendChild(tb); body.appendChild(t);
+    }).catch(function(e){ body.innerHTML = ''; body.appendChild(h('div',{class:'callout err'},[e.message])); });
+  }
+
+  /* --------------------- Boot --------------------- */
+  window.addEventListener('load', function() {
+    render();
+  });
+})();
+</script>

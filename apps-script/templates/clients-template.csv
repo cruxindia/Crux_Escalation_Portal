@@ -1,0 +1,3 @@
+ClientName,ClientCode,ClientEmail,ClientCC,DefaultLocationHead,Status,EffectiveFrom,EffectiveTo,Notes
+ABC Bank,ABCB,ops@abc-bank.example.com,compliance@abc-bank.example.com,rahul.sharma@crux.example.com,ACTIVE,2026-01-01,,Demo client
+XYZ Finance,XYZF,support@xyzfin.example.com,,rahul.sharma@crux.example.com,ACTIVE,2026-01-01,,

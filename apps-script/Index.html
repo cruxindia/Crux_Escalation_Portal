@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <title>Crux — Client Escalation Matrix</title>
+    <?!= include('Styles'); ?>
+  </head>
+  <body>
+    <div id="app">
+      <div class="boot"><div class="boot-inner"><div class="spinner"></div><div>Loading Crux Escalation Matrix…</div></div></div>
+    </div>
+    <div id="toast" class="toast" aria-live="polite"></div>
+    <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-card">
+        <div class="modal-head"><div id="modal-title" class="modal-title"></div><button id="modal-close" class="icon-btn" aria-label="Close">×</button></div>
+        <div id="modal-body" class="modal-body"></div>
+        <div id="modal-foot" class="modal-foot"></div>
+      </div>
+    </div>
+    <script>
+      window.__BOOTSTRAP__ = <?!= bootstrap; ?>;
+    </script>
+    <?!= include('App'); ?>
+  </body>
+</html>
