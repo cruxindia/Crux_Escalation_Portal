@@ -123,6 +123,11 @@ h3 { font-size: 16px; }
 .toast.show { opacity: 1; transform: translateY(0); }
 .toast.err { background: var(--rose-600); }
 .toast.ok { background: var(--emerald-600); }
+.toast.info { background: var(--sky-600); }
+
+/* Global busy indicator */
+.busy { position: fixed; top: 14px; right: 14px; z-index: 220; background: var(--ink-900); color: #fff; padding: 6px 12px 6px 8px; border-radius: 999px; box-shadow: var(--shadow-md); display: flex; align-items: center; gap: 8px; font-size: 12px; font-family: var(--font-mono); }
+.busy .spinner { width: 14px; height: 14px; border-width: 2px; border-color: rgba(255,255,255,0.25); border-top-color: var(--amber-400); margin: 0; }
 
 /* Modal */
 .modal { position: fixed; inset: 0; background: rgba(14,17,22,.42); backdrop-filter: blur(2px); display:flex; align-items:center; justify-content:center; z-index: 150; padding: 24px; }

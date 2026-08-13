@@ -131,13 +131,13 @@ function rpc(action, payload) {
   try {
     var me = whoAmI_();
     if (!me.active && action !== 'auth.me' && action !== 'auth.requestAccess') {
-      throw new AuthError_('Your account is not yet approved. Please contact Admin.');
+      throw AuthError_('Your account is not yet approved. Please contact Admin.');
     }
     var handler = RPC_ROUTES[action];
     if (!handler) throw new Error('Unknown action: ' + action);
     // Enforce role at the route level.
     if (handler.roles && handler.roles.indexOf(me.role) === -1 && me.role !== 'ADMIN') {
-      throw new AuthError_('You are not authorised to perform this action.');
+      throw AuthError_('You are not authorised to perform this action.');
     }
     var out = handler.fn(payload || {}, me);
     return { ok: true, data: out };

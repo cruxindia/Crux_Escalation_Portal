@@ -1,0 +1,42 @@
+{
+  "summary": "Static code review of Google Apps Script fixes for Crux Escalation Matrix. Runtime testing not possible (domain-restricted Workspace SSO, Apps Script runtime not hostable in Emergent container). Reviewed h() helper, Modal.open, rpc(), render()/renderMain() in App.html; ensureSpreadsheet_, readTable_, appendRow_, updateRowById_, deleteRowById_, getSetting_, invalidateTableCache_ in Sheets.gs; whoAmI_ + _ME_CACHE in Auth.gs; and Index.html/Styles.html additions. All four documented bug fixes are correctly implemented. A few minor observations noted below; none are blockers.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "Sheets.gs saveHolidays_", "issue": "Manually clears sheet range via sh.getRange().clearContent() without calling invalidateTableCache_('HOLIDAYS'). If items array is EMPTY, no subsequent appendRow_ is executed and _TABLE_CACHE['HOLIDAYS'] may remain stale within the same execution. Low impact (writes still persist; only affects reads in the same RPC). Recommend explicit invalidateTableCache_('HOLIDAYS') after the clearContent() call."},
+      {"endpoint": "Auth.gs upsertUser_", "issue": "When an admin edits their OWN user record (e.g., role change) within a single RPC, _ME_CACHE is not invalidated. Very edge-case since role/status changes on self are rare within one call and next RPC gets fresh cache. Consider clearing _ME_CACHE when USERS is mutated (e.g., add to invalidateTableCache_ when name==='USERS')."},
+      {"endpoint": "Code.gs rpc() line 134", "issue": "Uses 'throw new AuthError_(...)' whereas AuthError_ is a factory (not a constructor). Works in JS because factory returns an object (which overrides new's default this), but is inconsistent with Auth.gs which uses 'throw AuthError_(...)'. Cosmetic only."},
+      {"endpoint": "App.html h() helper", "issue": "If a caller passes an Array as a child (instead of spreading via concat), it will be String()-ified to a comma-joined text node. Existing callers spread arrays correctly, but no defensive Array.isArray flatten. Optional hardening."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Modal submit UX", "issue": "In Modal.open, when action has close:true, Modal.close() runs synchronously immediately after onClick() dispatch. That means the button's 'Working…' state is never actually visible to the user for close-on-click actions. This is compensated by the global #busy pill (visible while any rpc() is in-flight), so users still get feedback. Consider deferring close to onClick's returned-promise .then() for a more coherent experience.", "affected_selectors": ["#modal-foot .btn"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional: add invalidateTableCache_('HOLIDAYS') at top of saveHolidays_() clear branch to be safe when items=[].",
+    "Optional: clear _ME_CACHE inside invalidateTableCache_ when name==='USERS' to defend against same-execution self-role-change edge case.",
+    "Optional: normalise 'throw new AuthError_(...)' to 'throw AuthError_(...)' in Code.gs:134 for consistency.",
+    "Optional: in Modal.open, if action.close is true and onClick returns a promise, close only on promise resolve so users see the 'Working…' state on the submit button."
+  ],
+  "critical_code_review_comments": [
+    "BUG 1 FIX VERIFIED: h() in App.html (lines 92-109) correctly filters null/false and handles nodeType!==falsy children by wrapping in document.createTextNode(String(c)). All types (number/Date/string/boolean-string/object) are safely converted. No appendChild-on-non-Node crash path remains.",
+    "BUG 2 FIX VERIFIED: _SS_CACHE + _SCHEMA_OK short-circuit ensureSpreadsheet_ after first call; _TABLE_CACHE is populated by readTable_ and invalidated in appendRow_/updateRowById_/deleteRowById_. _SETTINGS_MAP is invalidated when name==='SETTINGS' in invalidateTableCache_. _ME_CACHE in Auth.gs prevents a 2nd USERS read on whoAmI_ re-entry. Caches are per-V8 execution context, matching Apps Script's per-RPC isolation—no cross-request leakage.",
+    "BUG 3 FIX VERIFIED: rpc() wraps in setBusy(true/false) + 8s slow-toast, showing/hiding #busy pill. render() and renderMain() both wrapped in try/catch that render a friendly error callout so a view failure no longer blanks the shell. Modal.open sets b._busy, changes button text to 'Working…' and lowers opacity, restores in .finally(). All error paths covered including sync throws.",
+    "BUG 4: Confirmed non-code informational item; DEPLOYMENT.md §14 exists (not re-inspected in depth).",
+    "Regression: RPC_ROUTES in Code.gs preserves all v1.3.0 endpoints (clients, branches, matrix, import, escalations, admin users/settings/templates/holidays/logs, portal, gemini AI, jobs, csv export). No routes appear removed.",
+    "Note: _TABLE_CACHE stores by-reference; if a caller mutates the returned array/objects it corrupts the cache. Fortunately all downstream code appears to read-only or map() into new arrays before mutating. Something to audit if bugs re-appear."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (static review only)", "frontend": "N/A (static review only)"},
+  "test_credentials": "None used. Domain-restricted Google Workspace SSO; testing agent cannot authenticate to cruxindia.co.in. Deployed URL not fetched.",
+  "seed_data_creation": "None.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "This is a Google Apps Script Web App (server-side .gs + HtmlService client). Cannot be executed inside the Emergent container. All testing must be static code review or performed manually inside the deployed Web App URL by a signed-in cruxindia.co.in user. Source at /app/apps-script/. Fresh bundle /app/crux-escalation-matrix.zip. Key files: App.html (h helper/Modal/rpc/render), Sheets.gs (_TABLE_CACHE + invalidateTableCache_), Auth.gs (_ME_CACHE).",
+  "rca of the issue": "Bug 1: DOM appendChild crash was caused by h() passing raw Sheet cell values (numbers/Dates) into el.appendChild which requires Node/string. Fix wraps non-Node children in document.createTextNode(String(c)). Verified. Bug 2: Slowness came from repeated per-RPC calls to ensureSpreadsheet_ (opens spreadsheet + scans 12 sheet headers) + repeated readTable_('USERS')/readTable_('SETTINGS'). Fix caches spreadsheet handle, schema-ok flag, table rows, settings map, and current-user identity at module scope; caches invalidated on all write paths. Verified. Bug 3: Silent submit was compound — Bug 1 wiped toast area and no busy indicator. Fix adds global #busy pill via setBusy(), 8s slow toast, per-button Working… state in Modal, and view-level try/catch in render/renderMain. Verified. Bug 4: Google's unverified-Apps-Script banner — informational, not a code defect."
+}

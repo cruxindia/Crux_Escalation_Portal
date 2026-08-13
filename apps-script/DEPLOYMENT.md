@@ -118,6 +118,21 @@ Only the source files in `/app/apps-script/` need to live in GitHub. Deployment 
 
 If you want to sync GitHub → Apps Script automatically, install `clasp` (`npm i -g @google/clasp`), run `clasp login`, `clasp clone <SCRIPT_ID>` inside a local copy, and set up a GitHub Action that runs `clasp push` on merges to `main`. See `CI_CD.md` for the ready-made workflow.
 
+> **Note on GitHub vs Google Sheets** — GitHub is only used to keep the *source code* (`.gs` and `.html` files) under version control. It is **not** part of the running app. At runtime, all data lives in the Google Spreadsheet the app creates on first run — clients, branches, matrix, users, logs, settings and templates. Nothing your team enters ever leaves Google.
+
+## 14. The "This app was created by another user" warning
+
+The first time any user opens the deployed URL, Google shows a screen that reads roughly:
+
+> *"This application, created by <you>, is requesting permission to access your data. This application is not verified by Google."*
+
+This is Google's **standard warning for all unverified Apps Script Web Apps** — verification is only granted after paid OAuth verification, which is disproportionate for an internal tool. What you can do:
+
+- **Domain-restricted deployment** (recommended) — deploying with access = *Only people in cruxindia.co.in* keeps the warning as a one-time acceptance per user. After they click *"Advanced → Go to Crux Escalation Matrix (unsafe)"* → *Allow*, subsequent opens are smooth.
+- **Google Workspace admin trust** — a Google Workspace super-admin can pre-approve the script for the domain in *Admin Console → Security → API Controls → Domain-wide delegation*, or by publishing it as an internal app in the Workspace Marketplace. Either removes the warning for everyone in the domain.
+
+The warning is cosmetic; it does not indicate anything wrong with your build.
+
 ## 12. Client Portal (read-only, tokenised)
 
 The tool includes a **read-only client-facing portal**. Any admin/manager/location-head can click **🔗 Client portal link** on a client's detail page to get a signed URL of the form:

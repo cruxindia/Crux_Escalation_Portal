@@ -10,32 +10,33 @@
 
 var VALID_ROLES = ['ADMIN','MANAGER','LOCATION_HEAD','VIEWER'];
 
+var _ME_CACHE = null;
 function whoAmI_() {
+  if (_ME_CACHE) return _ME_CACHE;
   var email = '';
   try { email = (Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail() || '').toLowerCase(); } catch (e) {}
-  if (!email) return { email: '', role: 'VIEWER', active: false, name: 'Guest', pending: true };
+  if (!email) { _ME_CACHE = { email: '', role: 'VIEWER', active: false, name: 'Guest', pending: true }; return _ME_CACHE; }
   var user = readTable_('USERS').filter(function(u){ return String(u.Email || '').toLowerCase() === email; })[0];
   if (!user) {
-    // First-time user; auto-create as pending so an admin can approve.
     var newU = {
       UserID: nextId_('USR'),
       Name: email.split('@')[0], Email: email, Mobile: '', Designation: '',
       Role: 'LOCATION_HEAD', LocationHead: '', Manager: '',
       Status: 'PENDING', CreatedAt: nowIso_(), UpdatedAt: nowIso_(), UpdatedBy: 'system'
     };
-    // Never let a user auto-become admin. But if the sheet has no admins yet, seed as admin.
     var admins = readTable_('USERS').filter(function(u){ return u.Role === 'ADMIN' && u.Status === 'ACTIVE'; });
     if (admins.length === 0) { newU.Role = 'ADMIN'; newU.Status = 'ACTIVE'; }
     appendRow_('USERS', newU);
     user = newU;
   }
-  return {
+  _ME_CACHE = {
     email: user.Email, name: user.Name, role: user.Role,
     active: user.Status === 'ACTIVE',
     pending: user.Status === 'PENDING',
     userId: user.UserID,
     locationHead: user.LocationHead || ''
   };
+  return _ME_CACHE;
 }
 
 function navForRole_(role) {

@@ -2,6 +2,17 @@
 
 Tracks what was built, what was intentionally deferred, and what remains open. Grows over time.
 
+## v1.3.1 — 2026-01-15 (post-deploy hotfix)
+
+Fixes reported after the first live deployment.
+
+- **DOM crash — `appendChild` on non-Node**: The `h()` helper previously fed raw values into `el.appendChild`. Numbers and Dates coming back from Google Sheets crashed the view. Fixed by wrapping non-Node children in `document.createTextNode(String(c))` and skipping `null / undefined / false`.
+- **Extreme slowness on Admin panels**: Every RPC was re-running `ensureSpreadsheet_` (scans all 12 sheets to verify headers) and re-reading USERS/SETTINGS multiple times. Added per-execution caches — `_SS_CACHE`, `_SCHEMA_OK`, `_TABLE_CACHE`, `_SETTINGS_MAP`, `_ME_CACHE` — with automatic invalidation on every write path (`appendRow_`, `updateRowById_`, `deleteRowById_`, `saveHolidays_` clear).
+- **Submit buttons appeared to do nothing**: Combined effect of the DOM crash wiping the toast area and no in-flight visual. Added: (a) global **#busy** pill in the top-right that shows while any `rpc()` is in-flight, (b) per-button *"Working…"* state on Modal submit buttons that stays until the returned promise settles, (c) auto-close after promise resolves so users see the confirmation feedback, (d) *"Still working…"* toast after 8 s on very slow requests, (e) top-level `try/catch` around `render()` and `renderMain()` so a view failure shows a friendly error instead of a blank screen.
+- **Google's "created by another user" warning**: Documented in `DEPLOYMENT.md` §14. This is Google's standard warning for all unverified Apps Script Web Apps — cosmetic only, one-time acceptance per user, or removable domain-wide by a Workspace super-admin.
+- **GitHub vs Sheets clarification**: Added a note in `DEPLOYMENT.md` §12 explaining that GitHub only stores source code — all runtime data lives in the Google Spreadsheet the app creates.
+- **Minor tightenings** (from static code-review pass): `invalidateTableCache_('USERS')` now also clears `_ME_CACHE`; `invalidateTableCache_('HOLIDAYS')` added to `saveHolidays_` clear branch; `throw new AuthError_` normalized to `throw AuthError_` in the RPC dispatcher.
+
 ## v1.3.0 — 2026-01-15 (dashboard AI pin)
 
 - **Weekly Snapshot** — Three pinned AI-anomaly cards at the top of the Dashboard for ADMIN/MANAGER. Each card shows a title, severity badge (low/medium/high with matching left-border colour), one-sentence detail cited from the last 7 days of `EMAIL_LOG` + `ESCALATIONS` + `CLIENTS`, and a one-line *Try …* suggestion.

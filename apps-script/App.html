@@ -15,17 +15,27 @@
   };
 
   /* --------------------- RPC wrapper --------------------- */
+  var _rpcPending = 0;
+  function setBusy(on) {
+    _rpcPending = Math.max(0, _rpcPending + (on ? 1 : -1));
+    var sp = document.getElementById('busy');
+    if (sp) sp.style.display = _rpcPending > 0 ? 'flex' : 'none';
+  }
   function rpc(action, payload) {
+    setBusy(true);
+    var slowTimer = setTimeout(function(){ toast('Still working… Google Sheets can be slow. Please wait.', 'info'); }, 8000);
     return new Promise(function(resolve, reject) {
       google.script.run
         .withSuccessHandler(function(res) {
-          if (!res) return reject(new Error('No response'));
+          if (!res) return reject(new Error('No response from server'));
           if (!res.ok) return reject(new Error(res.error || 'Request failed'));
           resolve(res.data);
         })
-        .withFailureHandler(function(err) { reject(err); })
+        .withFailureHandler(function(err) {
+          reject(new Error(err && err.message ? err.message : (err ? String(err) : 'Server error')));
+        })
         .rpc(action, payload || {});
-    });
+    }).finally(function(){ setBusy(false); clearTimeout(slowTimer); });
   }
 
   /* --------------------- Toast + Modal --------------------- */
@@ -46,7 +56,30 @@
         b.className = 'btn ' + (a.kind || '');
         b.textContent = a.label;
         b.setAttribute('data-testid', a.testid || ('modal-action-' + (a.label||'').toLowerCase().replace(/\s+/g,'-')));
-        b.onclick = function() { if (a.onClick) a.onClick(); if (a.close) Modal.close(); };
+        b.onclick = function() {
+          if (b._busy) return;
+          if (!a.onClick) { if (a.close) Modal.close(); return; }
+          b._busy = true;
+          var orig = b.textContent;
+          b.textContent = 'Working…';
+          b.style.opacity = '0.7';
+          var restore = function(){ b._busy = false; b.textContent = orig; b.style.opacity = '1'; };
+          try {
+            var r = a.onClick();
+            if (r && typeof r.then === 'function') {
+              // Async: restore + optionally close only after the promise settles.
+              r.then(function(){ if (a.close) Modal.close(); }, function(){})
+               .then(restore, restore);
+            } else {
+              // Sync completion.
+              restore();
+              if (a.close) Modal.close();
+            }
+          } catch (e) {
+            restore();
+            toast(e.message || String(e), 'err');
+          }
+        };
         foot.appendChild(b);
       });
       document.getElementById('modal').classList.remove('hidden');
@@ -62,16 +95,18 @@
   function h(tag, attrs, children) {
     var el = document.createElement(tag);
     Object.keys(attrs || {}).forEach(function(k) {
-      if (k === 'class') el.className = attrs[k];
-      else if (k === 'html') el.innerHTML = attrs[k];
-      else if (k.slice(0,2) === 'on') el[k.toLowerCase()] = attrs[k];
-      else if (k === 'testid') el.setAttribute('data-testid', attrs[k]);
-      else el.setAttribute(k, attrs[k]);
+      var v = attrs[k];
+      if (v == null || v === false) return;
+      if (k === 'class') el.className = v;
+      else if (k === 'html') el.innerHTML = v;
+      else if (k.slice(0,2) === 'on') el[k.toLowerCase()] = v;
+      else if (k === 'testid') el.setAttribute('data-testid', String(v));
+      else el.setAttribute(k, String(v));
     });
     (children || []).forEach(function(c) {
-      if (c == null) return;
-      if (typeof c === 'string') el.appendChild(document.createTextNode(c));
-      else el.appendChild(c);
+      if (c == null || c === false) return;
+      if (c && c.nodeType) el.appendChild(c);
+      else el.appendChild(document.createTextNode(String(c)));
     });
     return el;
   }
@@ -88,12 +123,22 @@
 
   /* --------------------- Shell --------------------- */
   function render() {
-    var app = document.getElementById('app');
-    if (!state.user.email) return renderLogin(app);
-    if (!state.user.active) return renderPendingApproval(app);
-    app.innerHTML = '';
-    var shell = h('div', { class: 'app-shell' }, [renderSidebar(), renderMain()]);
-    app.appendChild(shell);
+    try {
+      var app = document.getElementById('app');
+      if (!state.user.email) return renderLogin(app);
+      if (!state.user.active) return renderPendingApproval(app);
+      app.innerHTML = '';
+      var shell = h('div', { class: 'app-shell' }, [renderSidebar(), renderMain()]);
+      app.appendChild(shell);
+    } catch (err) {
+      var app2 = document.getElementById('app');
+      app2.innerHTML = '';
+      app2.appendChild(h('div',{class:'main'},[
+        h('div',{class:'callout err'},['Something went wrong rendering this page: ' + (err && err.message ? err.message : String(err))]),
+        h('button',{class:'btn secondary', onclick: function(){ state.route = 'dashboard'; state.routeParams = {}; render(); }},['Back to dashboard'])
+      ]));
+      try { console.error(err); } catch (e) {}
+    }
   }
 
   function renderSidebar() {
@@ -120,7 +165,11 @@
   function renderMain() {
     var view = Routes[state.route] || Routes[currentNavKey()] || Routes.dashboard;
     var container = h('div',{class:'main', testid:'view-'+currentNavKey()}, []);
-    view(container);
+    try { view(container); }
+    catch (err) {
+      container.innerHTML = '';
+      container.appendChild(h('div',{class:'callout err'},['Unable to render this view: ' + (err && err.message ? err.message : String(err))]));
+    }
     return container;
   }
 
@@ -452,7 +501,7 @@
             ClientEmail: val('f-email'), ClientCC: val('f-cc'),
             DefaultLocationHead: val('f-lh'), Status: val('f-status'), Notes: val('f-notes')
           };
-          rpc('clients.upsert', payload).then(function(){ Modal.close(); toast('Saved','ok'); loadClients(); if (state.route === 'client-detail') render(); }).catch(function(e){ toast(e.message,'err'); });
+          return rpc('clients.upsert', payload).then(function(){ Modal.close(); toast('Saved','ok'); loadClients(); if (state.route === 'client-detail') render(); }).catch(function(e){ toast(e.message,'err'); });
         }}
       ]
     });
@@ -494,7 +543,7 @@
             BranchManagerName: val('b-bm'), BranchManagerMobile: val('b-bmm'), BranchManagerEmail: val('b-bme'),
             LocationHead: val('b-lh'), Location: val('b-loc'), Zone: val('b-zone')
           };
-          rpc('branches.upsert', payload).then(function(){ Modal.close(); toast('Branch saved','ok'); render(); }).catch(function(e){ toast(e.message,'err'); });
+          return rpc('branches.upsert', payload).then(function(){ Modal.close(); toast('Branch saved','ok'); render(); }).catch(function(e){ toast(e.message,'err'); });
         }}
       ]
     });
@@ -645,7 +694,7 @@
               EscalatedAgainst: val('e-against'), TargetDate: val('e-tgt'),
               Description: val('e-desc'), RequiredAction: val('e-action')
             };
-            rpc('escalations.log', payload).then(function(){ Modal.close(); toast('Escalation logged','ok'); go('escalations'); }).catch(function(e){ toast(e.message,'err'); });
+            return rpc('escalations.log', payload).then(function(){ Modal.close(); toast('Escalation logged','ok'); go('escalations'); }).catch(function(e){ toast(e.message,'err'); });
           }}
         ]
       });
@@ -701,7 +750,7 @@
               RequiredResolution: val('r-resolution'), To: val('r-to'), Cc: val('r-cc'),
               Attachments: Routes._raiseAttachments
             };
-            rpc('escalations.raise', payload).then(function(res){
+            return rpc('escalations.raise', payload).then(function(res){
               Routes._raiseAttachments = [];
               Modal.close();
               toast(res.email && res.email.status === 'SENT' ? 'Escalation sent' : 'Escalation created (email: '+(res.email && res.email.status)+')', res.email && res.email.status === 'SENT' ? 'ok' : 'err');
@@ -844,7 +893,7 @@
       title: 'Escalation ' + e.EscalationID,
       body: body,
       actions: [{ label:'Close', kind:'secondary', close:true }, { label:'Update', testid:'btn-update-escalation', onClick: function() {
-        rpc('escalations.update', { EscalationID: e.EscalationID, Status: val('es-status'), ClosureRemarks: val('es-remarks'), ClosureDate: (val('es-status') === 'CLOSED' ? new Date().toISOString().slice(0,10) : '') })
+        return rpc('escalations.update', { EscalationID: e.EscalationID, Status: val('es-status'), ClosureRemarks: val('es-remarks'), ClosureDate: (val('es-status') === 'CLOSED' ? new Date().toISOString().slice(0,10) : '') })
           .then(function(){ Modal.close(); toast('Updated','ok'); go('escalations'); }).catch(function(e){ toast(e.message,'err'); });
       }}]
     });
@@ -895,7 +944,7 @@
       actions: [
         { label:'Cancel', kind:'secondary', close:true },
         { label:'Save', testid:'submit-user', onClick: function(){
-          rpc('admin.users.upsert', { UserID: u.UserID, Name: val('u-name'), Email: val('u-email'), Role: val('u-role'), LocationHead: val('u-lh'), Status: val('u-status') })
+          return rpc('admin.users.upsert', { UserID: u.UserID, Name: val('u-name'), Email: val('u-email'), Role: val('u-role'), LocationHead: val('u-lh'), Status: val('u-status') })
             .then(function(){ Modal.close(); toast('User saved','ok'); render(); }).catch(function(e){ toast(e.message,'err'); });
         }}
       ]

@@ -62,44 +62,60 @@ var DEFAULT_TEMPLATES = [
 ];
 
 var SS_PROP_KEY = 'CRUX_SS_ID';
+// Per-execution caches — Apps Script instantiates a fresh V8 context per RPC call.
+// Caching within a single execution avoids repeat spreadsheet opens + header scans.
+var _SS_CACHE = null;
+var _SCHEMA_OK = false;
+var _TABLE_CACHE = {};
+var _SETTINGS_MAP = null;
+
+function invalidateTableCache_(name) {
+  if (name) delete _TABLE_CACHE[name]; else _TABLE_CACHE = {};
+  if (name === 'SETTINGS' || !name) _SETTINGS_MAP = null;
+  if (name === 'USERS' || !name) _ME_CACHE = null;
+}
 
 function ensureSpreadsheet_() {
-  var props = PropertiesService.getScriptProperties();
-  var id = props.getProperty(SS_PROP_KEY);
-  var ss;
-  if (id) {
-    try { ss = SpreadsheetApp.openById(id); } catch (e) { ss = null; }
-  }
+  if (_SS_CACHE && _SCHEMA_OK) return _SS_CACHE;
+  var ss = _SS_CACHE;
   if (!ss) {
-    ss = SpreadsheetApp.create('Crux Escalation Matrix — Datastore');
-    props.setProperty(SS_PROP_KEY, ss.getId());
-  }
-  // Ensure every table exists with headers.
-  Object.keys(SCHEMA).forEach(function(name) {
-    var sh = ss.getSheetByName(name);
-    var headers = SCHEMA[name];
-    if (!sh) {
-      sh = ss.insertSheet(name);
-      sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
-      sh.setFrozenRows(1);
-    } else {
-      // Ensure header row matches (extend if columns added).
-      var existing = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0];
-      var missing = headers.filter(function(h){ return existing.indexOf(h) === -1; });
-      if (missing.length) {
-        var startCol = sh.getLastColumn() + 1;
-        sh.getRange(1, startCol, 1, missing.length).setValues([missing]).setFontWeight('bold');
-      }
+    var props = PropertiesService.getScriptProperties();
+    var id = props.getProperty(SS_PROP_KEY);
+    if (id) {
+      try { ss = SpreadsheetApp.openById(id); } catch (e) { ss = null; }
     }
-  });
-  // Remove the auto-created "Sheet1" if empty.
-  var extra = ss.getSheetByName('Sheet1');
-  if (extra && extra.getLastRow() <= 1 && Object.keys(SCHEMA).indexOf('Sheet1') === -1) {
-    try { ss.deleteSheet(extra); } catch (e) {}
+    if (!ss) {
+      ss = SpreadsheetApp.create('Crux Escalation Matrix — Datastore');
+      props.setProperty(SS_PROP_KEY, ss.getId());
+    }
+    _SS_CACHE = ss;
   }
-  // Seed defaults.
-  seedSettingsIfEmpty_(ss);
-  seedTemplatesIfEmpty_(ss);
+  if (!_SCHEMA_OK) {
+    // Ensure every table exists with headers.
+    Object.keys(SCHEMA).forEach(function(name) {
+      var sh = ss.getSheetByName(name);
+      var headers = SCHEMA[name];
+      if (!sh) {
+        sh = ss.insertSheet(name);
+        sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+        sh.setFrozenRows(1);
+      } else {
+        var existing = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0];
+        var missing = headers.filter(function(h){ return existing.indexOf(h) === -1; });
+        if (missing.length) {
+          var startCol = sh.getLastColumn() + 1;
+          sh.getRange(1, startCol, 1, missing.length).setValues([missing]).setFontWeight('bold');
+        }
+      }
+    });
+    var extra = ss.getSheetByName('Sheet1');
+    if (extra && extra.getLastRow() <= 1 && Object.keys(SCHEMA).indexOf('Sheet1') === -1) {
+      try { ss.deleteSheet(extra); } catch (e) {}
+    }
+    seedSettingsIfEmpty_(ss);
+    seedTemplatesIfEmpty_(ss);
+    _SCHEMA_OK = true;
+  }
   return ss;
 }
 
@@ -127,19 +143,21 @@ function sh_(name) {
 }
 
 function readTable_(name) {
+  if (_TABLE_CACHE[name]) return _TABLE_CACHE[name];
   var sh = sh_(name);
   var last = sh.getLastRow();
-  if (last < 2) return [];
+  if (last < 2) { _TABLE_CACHE[name] = []; return []; }
   var headers = SCHEMA[name];
   var values = sh.getRange(2, 1, last - 1, headers.length).getValues();
-  return values.map(function(row) {
+  var out = values.map(function(row) {
     var obj = {};
     headers.forEach(function(h, i) { obj[h] = row[i]; });
     return obj;
   }).filter(function(o){
-    // Skip fully blank rows.
     return Object.keys(o).some(function(k){ return o[k] !== '' && o[k] !== null; });
   });
+  _TABLE_CACHE[name] = out;
+  return out;
 }
 
 function appendRow_(name, obj) {
@@ -147,6 +165,7 @@ function appendRow_(name, obj) {
   var headers = SCHEMA[name];
   var row = headers.map(function(h){ return obj[h] === undefined ? '' : obj[h]; });
   sh.appendRow(row);
+  invalidateTableCache_(name);
   return obj;
 }
 
@@ -167,6 +186,7 @@ function updateRowById_(name, idField, idValue, patch) {
         return current[j];
       });
       sh.getRange(rowNum, 1, 1, headers.length).setValues([merged]);
+      invalidateTableCache_(name);
       var obj = {};
       headers.forEach(function(h, j){ obj[h] = merged[j]; });
       return obj;
@@ -191,18 +211,22 @@ function deleteRowById_(name, idField, idValue) {
   for (var i = 0; i < ids.length; i++) {
     if (String(ids[i][0]) === String(idValue)) {
       sh.deleteRow(i + 2);
+      invalidateTableCache_(name);
       return true;
     }
   }
   return false;
 }
 
-/** SETTINGS helpers. */
+/** SETTINGS helpers. Reads are hot — use a per-execution map cache. */
 function getSetting_(key, dflt) {
-  var rows = readTable_('SETTINGS');
-  var hit = rows.filter(function(r){ return r.Key === key; })[0];
-  if (!hit || hit.Value === '' || hit.Value === null || hit.Value === undefined) return dflt;
-  return String(hit.Value);
+  if (!_SETTINGS_MAP) {
+    _SETTINGS_MAP = {};
+    readTable_('SETTINGS').forEach(function(r){ _SETTINGS_MAP[r.Key] = r.Value; });
+  }
+  var v = _SETTINGS_MAP[key];
+  if (v === undefined || v === '' || v === null) return dflt;
+  return String(v);
 }
 
 function setSetting_(key, value, user) {
@@ -243,6 +267,7 @@ function saveHolidays_(payload, me) {
   var sh = sh_('HOLIDAYS');
   var last = sh.getLastRow();
   if (last > 1) sh.getRange(2, 1, last - 1, SCHEMA.HOLIDAYS.length).clearContent();
+  invalidateTableCache_('HOLIDAYS');
   items.forEach(function(h) {
     appendRow_('HOLIDAYS', {
       HolidayID: h.HolidayID || nextId_('HOL'),
