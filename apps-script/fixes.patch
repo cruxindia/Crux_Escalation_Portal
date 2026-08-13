@@ -1,0 +1,183 @@
+--- orig/apps-script/Sheets.gs	2026-08-13 21:06:47.464438371 +0000
++++ src/apps-script/Sheets.gs	2026-08-13 21:07:11.580397094 +0000
+@@ -69,6 +69,18 @@
+ var _TABLE_CACHE = {};
+ var _SETTINGS_MAP = null;
+ 
++// PERF FIX: the caches above die with the execution, so the 12-table header
++// scan in ensureSpreadsheet_ used to re-run on EVERY rpc() call (~26+ Sheets
++// API round-trips before any real work). We persist a "schema verified" stamp
++// in Script Properties instead. The stamp encodes the table list AND every
++// header name, so editing SCHEMA in code automatically forces one re-scan.
++var SCHEMA_STAMP_KEY = 'CRUX_SCHEMA_STAMP';
++function schemaStamp_() {
++  return Object.keys(SCHEMA).sort().map(function(n) {
++    return n + '[' + SCHEMA[n].join(',') + ']';
++  }).join('|');
++}
++
+ function invalidateTableCache_(name) {
+   if (name) delete _TABLE_CACHE[name]; else _TABLE_CACHE = {};
+   if (name === 'SETTINGS' || !name) _SETTINGS_MAP = null;
+@@ -91,6 +103,12 @@
+     _SS_CACHE = ss;
+   }
+   if (!_SCHEMA_OK) {
++    // Fast path: a previous execution already verified this exact schema.
++    var sProps = PropertiesService.getScriptProperties();
++    if (sProps.getProperty(SCHEMA_STAMP_KEY) === schemaStamp_()) {
++      _SCHEMA_OK = true;
++      return ss;
++    }
+     // Ensure every table exists with headers.
+     Object.keys(SCHEMA).forEach(function(name) {
+       var sh = ss.getSheetByName(name);
+@@ -114,6 +132,7 @@
+     }
+     seedSettingsIfEmpty_(ss);
+     seedTemplatesIfEmpty_(ss);
++    sProps.setProperty(SCHEMA_STAMP_KEY, schemaStamp_());
+     _SCHEMA_OK = true;
+   }
+   return ss;
+@@ -219,6 +238,18 @@
+ }
+ 
+ /** SETTINGS helpers. Reads are hot — use a per-execution map cache. */
++/**
++ * SAFETY FIX: booleans in SETTINGS are typed by humans. `=== 'true'` meant a
++ * cell containing TRUE / True / Yes / 1 read as FALSE — so an admin could
++ * "enable" DRY_RUN and still blast real client mailboxes. Always route boolean
++ * settings through this.
++ */
++function getBoolSetting_(key, dflt) {
++  var raw = getSetting_(key, dflt == null ? 'false' : String(dflt));
++  var v = String(raw).trim().toLowerCase();
++  return v === 'true' || v === 'yes' || v === 'y' || v === '1' || v === 'on';
++}
++
+ function getSetting_(key, dflt) {
+   if (!_SETTINGS_MAP) {
+     _SETTINGS_MAP = {};
+--- orig/apps-script/Code.gs	2026-08-13 21:06:47.462524198 +0000
++++ src/apps-script/Code.gs	2026-08-13 21:07:25.812885554 +0000
+@@ -108,7 +108,7 @@
+       company: getSetting_('COMPANY_NAME', 'Crux Risk Management Pvt Ltd'),
+       timezone: getSetting_('APP_TIMEZONE', 'Asia/Kolkata'),
+       dateFormat: getSetting_('DATE_FORMAT', 'dd-MMM-yyyy'),
+-      testMode: getSetting_('DRY_RUN', 'false') === 'true',
++      testMode: getBoolSetting_('DRY_RUN', 'false'),
+       version: '1.0.0'
+     },
+     nav: navForRole_(me.role),
+@@ -237,7 +237,16 @@
+   'portal.rotate':        { roles: ['ADMIN'], fn: function(p, me) { return portalRotate_(me); } },
+ 
+   // Gemini AI
+-  'ai.status':            { roles: ['ADMIN','MANAGER','LOCATION_HEAD','VIEWER'], fn: function(p, me) { return geminiStatus_(); } },
++  // Fail-soft: App.html calls ai.status on EVERY page load. If Gemini.gs is
++  // missing from the deployed project (a partial clasp push / manual copy-paste)
++  // a bare call throws ReferenceError, which the dispatcher then writes to
++  // AUDIT_LOG on every single boot. Degrade to "AI unavailable" instead.
++  'ai.status':            { roles: ['ADMIN','MANAGER','LOCATION_HEAD','VIEWER'], fn: function(p, me) {
++                              if (typeof geminiStatus_ !== 'function') {
++                                return { configured: false, enabled: false, model: '', keyPreview: '', unavailable: true };
++                              }
++                              return geminiStatus_();
++                            } },
+   'ai.saveConfig':        { roles: ['ADMIN'], fn: function(p, me) { return geminiSaveConfig_(p, me); } },
+   'ai.classifyEscalation':{ roles: ['ADMIN','LOCATION_HEAD','MANAGER'], fn: function(p, me) { return aiClassifyEscalation_(p, me); } },
+   'ai.draftEscalation':   { roles: ['ADMIN','LOCATION_HEAD','MANAGER'], fn: function(p, me) { return aiDraftEscalation_(p, me); } },
+--- orig/apps-script/Email.gs	2026-08-13 21:06:47.463064977 +0000
++++ src/apps-script/Email.gs	2026-08-13 21:07:17.411077121 +0000
+@@ -24,7 +24,7 @@
+       })[0];
+       if (existing) return { skipped: true, reason: 'already sent', logId: existing.LogID };
+     }
+-    var dryRun = getSetting_('DRY_RUN','false') === 'true';
++    var dryRun = getBoolSetting_('DRY_RUN','false');
+     var override = getSetting_('TEST_EMAIL_OVERRIDE','');
+     var toAddr = (opt.to || []).slice();
+     var ccAddr = dedupeEmails_(opt.cc || [], toAddr);
+--- orig/apps-script/.github/workflows/deploy-appsscript.yml	2026-08-13 21:06:47.460829920 +0000
++++ src/apps-script/.github/workflows/deploy-appsscript.yml	2026-08-13 21:07:47.960201900 +0000
+@@ -13,18 +13,24 @@
+ #   3. Optional: set repository secret `DEPLOY_ID` = an existing web-app
+ #      deployment id to update in place (from `clasp deployments`).
+ 
++# ROOT-CAUSE FIX: this workflow previously triggered only on `main`, and this
++# repository has no `main` branch — so it had never run once. The live /exec URL
++# was therefore serving stale, pre-v1.3.1 code. Trigger on the branches that
++# actually exist.
+ on:
+   push:
+-    branches: [main]
++    branches:
++      - main
++      - conflict_130826_2114
+     paths:
+       - 'apps-script/**'
+       - '.github/workflows/deploy-appsscript.yml'
+   workflow_dispatch:
+     inputs:
+       deploy:
+-        description: 'Cut a new versioned web-app deployment?'
++        description: 'Also update the live web-app deployment?'
+         required: false
+-        default: 'false'
++        default: 'true'
+ 
+ concurrency:
+   group: appsscript-deploy
+@@ -65,8 +71,13 @@
+       - name: Push source to Apps Script
+         run: clasp push --force
+ 
+-      - name: Deploy new version (optional)
+-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true' }}
++      # CRITICAL: `clasp push` only updates the script's HEAD content. The
++      # /exec web-app URL serves a PINNED VERSION, so pushing without deploying
++      # leaves users on the old code — the exact trap that caused this incident.
++      # With DEPLOY_ID set we update that deployment in place, which publishes
++      # the new version WITHOUT minting a second /exec URL.
++      - name: Update live web-app deployment
++        if: ${{ github.event_name == 'push' || github.event.inputs.deploy == 'true' }}
+         env:
+           DEPLOY_ID: ${{ secrets.DEPLOY_ID }}
+         run: |
+@@ -74,5 +85,12 @@
+           if [ -n "$DEPLOY_ID" ]; then
+             clasp deploy --deploymentId "$DEPLOY_ID" --description "$DESC"
+           else
++            echo "::warning::DEPLOY_ID secret not set. Creating a NEW deployment," \
++                 "which mints a NEW /exec URL. Set DEPLOY_ID to update in place."
+             clasp deploy --description "$DESC"
+           fi
++
++      - name: Confirm deployed files
++        run: |
++          echo "Files pushed to Apps Script:"
++          clasp status --json || true
+--- orig/apps-script/DEPLOYMENT.md	2026-08-13 21:06:47.462806005 +0000
++++ src/apps-script/DEPLOYMENT.md	2026-08-13 21:16:13.076626859 +0000
+@@ -33,9 +33,20 @@
+     | `Scheduler.gs`       | Script  | `Scheduler.gs`                    |
+     | `Escalation.gs`      | Script  | `Escalation.gs`                   |
+     | `Import.gs`          | Script  | `Import.gs`                       |
++    | `Gemini.gs`          | Script  | `Gemini.gs`                       |
++    | `Portal.gs`          | Script  | `Portal.gs`                       |
+     | `Index.html`         | HTML    | `Index.html`                      |
+     | `Styles.html`        | HTML    | `Styles.html`                     |
+     | `App.html`           | HTML    | `App.html`                        |
++    | `Portal.html`        | HTML    | `Portal.html`                     |
++
++    > **All 15 files are mandatory** (11 `.gs` + 4 `.html`). This table was stale
++    > through v1.3.x and omitted `Gemini.gs`, `Portal.gs` and `Portal.html`,
++    > which caused a production incident: `ai.status` threw
++    > `ReferenceError: geminiStatus_ is not defined` on every page load, and
++    > `setup()` aborted at `ensurePortalSecret_()` before printing
++    > "Setup complete". If you add a new file to the repo, add it here too.
++    > Verify with: **Apps Script editor → Files panel → count = 15 + manifest.**
+ 
+ 5. Show the manifest: **Project Settings → Show "appsscript.json" in editor**.
+    Replace its contents with the `appsscript.json` from this folder.
