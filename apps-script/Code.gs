@@ -29,7 +29,7 @@ function doGet(e) {
   var params = (e && e.parameter) || {};
   if (params.view === 'portal') return renderPortal_(params);
   var tpl = HtmlService.createTemplateFromFile('Index');
-  tpl.bootstrap = JSON.stringify(getBootstrap_());
+  tpl.bootstrap = JSON.stringify(sanitizeForClient_(getBootstrap_()));
   return tpl.evaluate()
     .setTitle('Crux — Client Escalation Matrix')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
@@ -140,24 +140,43 @@ function rpc(action, payload) {
       throw AuthError_('You are not authorised to perform this action.');
     }
     var out = handler.fn(payload || {}, me);
-    return { ok: true, data: out };
+    // google.script.run cannot serialise Date objects and returns undefined
+    // to the client if it hits one. Sanitise every response before returning.
+    return { ok: true, data: sanitizeForClient_(out) };
   } catch (err) {
     var friendly = (err && err.isFriendly) ? err.message :
                    'Unable to complete the request. Please try again.';
-    // Structured server log for admin.
-    logAudit_({
-      user: (Session.getActiveUser() || {}).getEmail && Session.getActiveUser().getEmail() || 'unknown',
-      action: 'RPC_ERROR',
-      entity: action,
-      entityId: '',
-      oldValue: '',
-      newValue: JSON.stringify({ err: String(err && err.stack || err), payload: safePayload_(payload) })
-    });
+    try {
+      logAudit_({
+        user: (Session.getActiveUser() || {}).getEmail && Session.getActiveUser().getEmail() || 'unknown',
+        action: 'RPC_ERROR',
+        entity: action,
+        entityId: '',
+        oldValue: '',
+        newValue: JSON.stringify({ err: String(err && err.stack || err), payload: safePayload_(payload) })
+      });
+    } catch (auditErr) { /* audit must never mask the original error */ }
     return { ok: false, error: friendly };
   } finally {
-    // Keep call latency observable but do not spam logs.
     if (Date.now() - t0 > 4000) console.warn('slow rpc', action, Date.now() - t0);
   }
+}
+
+/**
+ * Convert values that google.script.run refuses to serialise (Date, functions,
+ * undefined) into safe primitives, recursively. Idempotent for already-safe data.
+ */
+function sanitizeForClient_(v) {
+  if (v === null || v === undefined) return v === undefined ? null : v;
+  if (v instanceof Date) return Utilities.formatDate(v, getTz_(), "yyyy-MM-dd'T'HH:mm:ssXXX");
+  if (typeof v === 'function') return null;
+  if (Array.isArray(v)) return v.map(sanitizeForClient_);
+  if (typeof v === 'object') {
+    var out = {};
+    Object.keys(v).forEach(function(k) { out[k] = sanitizeForClient_(v[k]); });
+    return out;
+  }
+  return v;
 }
 
 /** RPC registry. `roles` is inclusive-OR; ADMIN always passes. */

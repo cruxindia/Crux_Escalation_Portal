@@ -1,0 +1,32 @@
+{
+  "summary": "Static code review of Apps Script fix for 'No response from server' bug. Verified sanitizeForClient_ implementation in /app/apps-script/Code.gs and its application at every RPC boundary. Runtime testing not possible (Google Apps Script on Crux Workspace SSO). All 5 review criteria from the request pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "sanitizeForClient_ (Code.gs:169-180) correctly handles null, undefined->null, Date->ISO-8601 via Utilities.formatDate(v, getTz_(), \"yyyy-MM-dd'T'HH:mm:ssXXX\"), function->null, Array (recursive), Object (recursive key-preserving), primitives pass through. Idempotent for already-safe input.",
+    "Applied at RPC success exit (Code.gs:145 -> {ok:true, data: sanitizeForClient_(out)}) and at bootstrap payload (Code.gs:32 -> tpl.bootstrap = JSON.stringify(sanitizeForClient_(getBootstrap_()))). Correct.",
+    "Error path (Code.gs:146-159) returns {ok:false, error:<friendly string>}. Strings are already safe; sanitising unnecessary and correctly omitted.",
+    "logAudit_ call inside the RPC catch block is wrapped in its own try/catch (Code.gs:149-158) so a Sheets write failure during audit cannot re-throw and mask the friendly error return. Correct.",
+    "Client-side google.script.run usage: only ONE occurrence in the entire client tree (App.html:28), and it always routes through the rpc() Promise wrapper. Index.html and Portal.html contain zero direct RPC calls (Portal is server-rendered). No raw Date can leak past the sanitiser.",
+    "Helper dependencies verified present: getTz_ (Utils.gs:19), nowIso_ (Utils.gs:12), safePayload_ (Utils.gs:111), AuthError_ (Utils.gs:5), logAudit_ (Sheets.gs:283).",
+    "Known limitation (documented and accepted): sanitizeForClient_ will infinite-loop on genuine circular references. Sheet-derived data has no circles, so this is safe in practice.",
+    "Minor style nit (non-blocking): Code.gs:170 `return v === undefined ? null : v;` is slightly convoluted after the outer null-or-undefined guard; equivalent to `return null;`. No functional impact.",
+    "Spot-checked RPC routes (clients.list, clients.get, dashboard.summary, admin.logs.email, ai.status, portal.getLink) — all pass through the single dispatcher, so all get sanitised uniformly. No route bypasses the wrapper."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (static review)", "frontend": "n/a"},
+  "seed_data_creation": "",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "This is a Google Apps Script project — no runtime testing possible in Emergent container. Reviews here are static only. The Date-serialisation bug fix is well-scoped and correct. If user re-reports 'No response from server' after redeploy, next step is to have them run the deployed URL, open DevTools console, and capture the actual server response object — if res is genuinely undefined, look for uncaught exceptions in Apps Script's Executions log, not in the sanitiser.",
+  "rca of the issue": "google.script.run cannot serialise native JS Date objects across the client boundary; it silently returns undefined to the success handler. Rows read from Google Sheets contain Date objects for date-typed cells (Timestamp, CreatedAt, UpdatedAt, ExecutedAt, EffectiveFrom, EffectiveTo). The client-side rpc() wrapper interpreted the undefined as 'No response from server'. Mitigation: sanitizeForClient_ walks the return value recursively converting Date->ISO string (Asia/Kolkata), undefined->null, function->null before returning. Applied at both the rpc() dispatcher exit and the doGet bootstrap serialisation point. Reproduction: any RPC whose Sheets read includes a date cell would previously fail on the client with 'No response from server'; after fix, returns ISO string."
+}

@@ -79,6 +79,26 @@ This is a Google Apps Script Web App. It runs on Google's infrastructure, stores
 
 ## 8. Operations
 
+### Redeploying updates (very important)
+
+Every time you change any `.gs` or `.html` file (whether by pasting new code from GitHub into `script.google.com` or by using `clasp push`), you MUST cut a **new deployment version** — Apps Script does NOT auto-publish edits. Otherwise your live URL keeps serving the OLD code.
+
+Two ways:
+
+**Option A — Manual (once every change)**
+
+1. In the Apps Script editor, paste in the updated file contents. Save (Ctrl/⌘+S).
+2. Top-right → **Deploy → Manage deployments**.
+3. Find your existing deployment (the one whose URL you already gave people). Click the **pencil / edit** icon.
+4. Under **Version**, open the dropdown → **New version**. Optionally add a description ("v1.3.2 — Date fix").
+5. Click **Deploy**. The URL stays the same; the code behind it updates within ~30 seconds.
+
+> If you accidentally click *"New deployment"* instead of editing the existing one, you'll create a **second, different URL**. Your old URL will keep serving the old code. To fix: go to Manage deployments → Archive the new one → edit the original one instead.
+
+**Option B — Automatic via GitHub (recommended long-term)**
+
+Set up `clasp` + the workflow in `CI_CD.md` — once configured, `git push origin main` pushes source into Apps Script within a minute. Cutting a new deployment version still requires *Actions → Run workflow → deploy = true* (a one-click step).
+
 ### Automated jobs (Asia/Kolkata)
 
 | Job                         | When                                             | What it sends                                                     |

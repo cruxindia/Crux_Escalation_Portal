@@ -2,6 +2,13 @@
 
 Tracks what was built, what was intentionally deferred, and what remains open. Grows over time.
 
+## v1.3.2 — 2026-01-15 (Date-serialisation hotfix)
+
+- **"No response from server" errors** — Root cause: `google.script.run` refuses to serialise `Date` objects across the client boundary and returns `undefined` to the caller. Rows read from Google Sheets naturally contain `Date` values for date-typed cells, so almost every non-trivial response was silently getting dropped.
+  - **Fix**: added `sanitizeForClient_(v)` in `Code.gs` that walks the RPC return value recursively, converting `Date` → ISO string, `undefined` → `null`, dropping functions. Applied on every RPC response *and* on the initial `getBootstrap_()` payload rendered into the HTML template.
+- **Audit log write is now non-fatal** — the RPC `catch` block wraps `logAudit_` in a nested try/catch so a Sheets write failure while logging an error can no longer mask the original friendly-error return.
+- **Redeploy docs** — added `DEPLOYMENT.md` §8 "Redeploying updates" with the exact steps to publish a new version without accidentally spawning a second URL (the most common Apps Script deployment mistake).
+
 ## v1.3.1 — 2026-01-15 (post-deploy hotfix)
 
 Fixes reported after the first live deployment.
