@@ -39,11 +39,11 @@ class StatusCheckCreate(BaseModel):
 
 # Add your routes to the router instead of directly to app
 @api_router.get("/")
-async def root():
+async def root() -> dict[str, str]:
     return {"message": "Hello World"}
 
 @api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
+async def create_status_check(input: StatusCheckCreate) -> StatusCheck:
     status_dict = input.model_dump()
     status_obj = StatusCheck(**status_dict)
     
@@ -55,7 +55,7 @@ async def create_status_check(input: StatusCheckCreate):
     return status_obj
 
 @api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
+async def get_status_checks() -> List[StatusCheck]:
     # Exclude MongoDB's _id field from the query results
     status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
     
@@ -85,5 +85,5 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
+async def shutdown_db_client() -> None:
     client.close()
